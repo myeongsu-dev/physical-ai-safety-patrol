@@ -39,7 +39,8 @@ function fakeRobot({ stopAt = true } = {}) {
             const chans = (a[1] ?? "").split(",").filter(Boolean);
             if (+a[0]) timer = setInterval(() => { t += +a[0]; dist = Math.max(5, dist - 2); onChunk(frame("D", t, ...chans.map((c) => (c === "sonar" ? dist : c === "bat" ? 8400 : 0.5)))); }, 5);
           }
-          if (cmd === "U") { dist = 60; if (stopAt) setTimeout(() => say("E", t, "stop", 13.5), 30); }
+          if (cmd === "U" || cmd === "M") dist = 60; // 걷기마다 벽에서 다시 출발 (안 그러면 앞 시험에서 5cm로 바닥난 채 시작해 타이머가 정확한 Linux에서만 실패)
+          if (cmd === "U" && stopAt) setTimeout(() => say("E", t, "stop", 13.5), 30);
           say(cmd, "ok");
         },
         close() {},
