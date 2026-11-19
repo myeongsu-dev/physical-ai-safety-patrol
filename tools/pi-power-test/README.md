@@ -22,7 +22,7 @@
 3. 저장소를 받습니다.
    ```bash
    git clone https://github.com/myeongsu-dev/physical-ai-safety-patrol.git
-   cd physical-ai-safety-patrol && git switch tools/pi-power-test
+   cd physical-ai-safety-patrol
    ```
 4. `python -m venv ~/potent && . ~/potent/bin/activate && pip install ultralytics` (torch 포함 수백 MB라 오래 걸립니다)
 5. XIAO를 Pi USB에 꽂고 `python tools/pi-power-test/power_test.py check`. 모델을 자동으로 받고, `점검 통과`가 나와야 합니다.

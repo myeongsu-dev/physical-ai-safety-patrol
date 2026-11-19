@@ -519,7 +519,7 @@ def cmd_check(a):
 
 
 def cmd_run(a):
-    if not a.adapter and not (a.capacity or a.rated5v):
+    if not a.adapter and a.capacity is None and a.rated5v is None:  # --capacity 0(모름)은 통과
         print("보조배터리는 --capacity(mAh) 또는 --rated5v(5V 정격 mAh)를 넣어야 사용 시간을 계산합니다. 모르면 --capacity 0")
         return 2
     problems, info = preflight(a.model, a.size)
