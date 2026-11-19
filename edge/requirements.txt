@@ -1,0 +1,8 @@
+pyserial
+smbus2
+opencv-python-headless
+ultralytics
+ncnn
+paho-mqtt>=2
+requests
+python-dotenv

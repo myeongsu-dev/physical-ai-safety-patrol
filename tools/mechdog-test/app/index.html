@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MechDog 동작 시험</title>
+<style>
+:root { --bg: #f5f6f8; --card: #fff; --fg: #1d2129; --sub: #5f6773; --line: #e2e5ea; --accent: #2563eb; --ok: #15803d; --bad: #dc2626; --soft: #eef1f5; --warn: #b45309; }
+@media (prefers-color-scheme: dark) { :root { --bg: #14161b; --card: #1c1f26; --fg: #e6e8ec; --sub: #98a1ad; --line: #2d313a; --accent: #7aa7ff; --ok: #4ade80; --bad: #f87171; --soft: #242832; --warn: #fbbf24; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.55 system-ui, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; word-break: keep-all; }
+header { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px; background: var(--card); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 16px; margin: 0 8px 0 0; }
+button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .45; cursor: default; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+#stop { margin-left: auto; background: var(--bad); color: #fff; border-color: var(--bad); font-weight: 700; padding: 8px 18px; }
+.chip { display: inline-flex; gap: 6px; align-items: center; padding: 3px 10px; border-radius: 999px; background: var(--soft); font-size: 12.5px; }
+.chip b { font-weight: 700; }
+main { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 14px; padding: 14px 16px 40px; max-width: 1400px; margin: 0 auto; }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.card h2 { font-size: 15px; margin: 0 0 10px; }
+.card + .card { margin-top: 14px; }
+.muted { color: var(--sub); }
+.small { font-size: 12.5px; }
+#tests .grp { margin: 10px 0 4px; font-size: 12.5px; color: var(--sub); font-weight: 700; }
+#tests button { display: block; width: 100%; text-align: left; margin: 3px 0; padding: 6px 10px; }
+#tests button.sel { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+#tests button .why { display: block; font-size: 11.5px; color: var(--warn); }
+.kind { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--soft); color: var(--sub); margin-left: 4px; }
+.refs span { display: inline-block; margin: 0 4px 4px 0; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; color: var(--sub); }
+.setup { background: var(--soft); border-radius: 8px; padding: 8px 12px; margin: 8px 0 12px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border-bottom: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; font-size: 13px; }
+th { color: var(--sub); font-weight: 600; white-space: nowrap; }
+.tw { overflow-x: auto; }
+input, select { font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); width: 100%; min-width: 60px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.row label { display: flex; gap: 6px; align-items: center; }
+.row label input { width: 110px; }
+#status { min-height: 1.5em; margin-top: 8px; }
+#verdict.pass { color: var(--ok); font-weight: 700; } #verdict.fail { color: var(--bad); font-weight: 700; }
+canvas { width: 100%; height: 160px; background: var(--soft); border-radius: 8px; display: block; }
+.live { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.ok { color: var(--ok); font-weight: 700; } .ng { color: var(--bad); font-weight: 700; }
+#log { height: 140px; overflow: auto; font: 12px ui-monospace, Consolas, monospace; background: var(--soft); border-radius: 8px; padding: 6px 8px; white-space: pre-wrap; }
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--fg); max-width: 440px; width: calc(100vw - 32px); }
+dialog::backdrop { background: rgb(0 0 0 / .35); }
+dialog label { display: block; margin: 8px 0; }
+details summary { cursor: pointer; font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MechDog 동작 시험</h1>
+  <button id="connect" class="primary">로봇 연결 (블루투스)</button>
+  <span id="devs" class="row"></span>
+  <button id="stop" title="스페이스바">정지</button>
+</header>
+<main>
+  <aside>
+    <section class="card">
+      <h2>시험 조건</h2>
+      <div class="small muted">모든 결과 줄에 같이 저장됩니다.</div>
+      <label class="small">바닥재 <input id="m-floor" placeholder="맨바닥 / 폼보드 5T / 하드보드지"></label>
+      <label class="small">하중(g) <input id="m-load" placeholder="0"></label>
+      <label class="small">메모 <input id="m-note" placeholder="배터리 교체 직후 등"></label>
+    </section>
+    <section class="card">
+      <h2>시험 목록</h2>
+      <div id="tests"></div>
+    </section>
+  </aside>
+  <div>
+    <section class="card" id="detail"><p class="muted">왼쪽에서 시험을 고르세요. 로봇을 연결하면 그 로봇이 할 수 있는 시험만 열립니다.</p></section>
+    <section class="card">
+      <h2>실시간 값</h2>
+      <div class="live" id="live"></div>
+      <canvas id="chart" width="1000" height="160"></canvas>
+      <div class="small muted" id="legend"></div>
+    </section>
+    <section class="card">
+      <div class="row"><h2 style="margin:0">결과</h2><span id="count" class="muted small"></span>
+        <span style="margin-left:auto" class="row"><button id="csv-sum">요약 CSV</button><button id="csv-raw">원시 CSV</button><button id="clear">지우기</button></span></div>
+      <p class="small muted">브라우저를 닫으면 사라집니다. 끝나면 CSV로 저장해 <code>results/</code>에 넣어 주세요.</p>
+      <div class="tw"><table id="results"></table></div>
+    </section>
+    <section class="card">
+      <details>
+        <summary>자유 조종 · 통신 기록</summary>
+        <div class="row" style="margin-top:10px">
+          <label>보폭 <input id="f-stride" type="number" value="50"></label>
+          <label>각도 <input id="f-angle" type="number" value="0"></label>
+          <label>시간(ms) <input id="f-ms" type="number" value="2000"></label>
+          <button data-free="M">이동</button><button data-free="P">기본 자세</button><button data-free="6">배터리</button><button data-free="V">정보</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label>명령 <input id="f-raw" placeholder="G|100|300|20" style="width:220px"></label><button data-free="raw">보내기</button>
+        </div>
+        <div id="log" style="margin-top:10px"></div>
+      </details>
+    </section>
+  </div>
+</main>
+<dialog id="dlg"><form method="dialog"><p id="dlg-title" style="font-weight:700;margin-top:0"></p><div id="dlg-body"></div>
+  <div class="row" style="flex-direction:row-reverse;margin-top:12px"><button value="ok" class="primary">확인</button><button value="cancel">중단</button></div></form></dialog>
+<script type="module" src="./main.js"></script>
+</body>
+</html>
