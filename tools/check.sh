@@ -7,3 +7,4 @@ cd "$(dirname "$0")/.."
 
 python tools/mechdog-test/devices/dog/sim_check.py
 node tools/mechdog-test/app/selfcheck.mjs
+python tools/pi-power-test/power_test.py selfcheck

@@ -40,7 +40,8 @@ physical-ai-safety-patrol/
 ├── dashboard/           관제 화면 (HTML·JS)                  · 이예은
 ├── ml/helmet/ · flame/  데이터·라벨·학습 (데이터는 커밋 안 함)
 ├── models/              Pi에 배포할 변환된 모델 (버전 폴더)
-└── tools/mechdog-test/  MechDog 동작 시험 도구 (웹 블루투스)
+├── tools/mechdog-test/  MechDog 동작 시험 도구 (웹 블루투스)
+└── tools/pi-power-test/ Pi 5 보조배터리 시험 (판정 · 사용 시간)
 ```
 
 각 폴더의 README에 맡은 일, 입출력, 실행 방법이 있습니다.
@@ -86,7 +87,7 @@ git push -u origin edge/thermo             # 3. GitHub에서 dev로 PR
 | `common` | 약속 셀프 체크 |
 | `firmware` · `edge` · `server` · `ml` | 파이썬 문법 |
 | `dashboard` | 없음 |
-| `tools` | MechDog 시험 도구 셀프 체크 (파이썬 · JS) |
+| `tools` | MechDog 시험 도구 셀프 체크 (파이썬 · JS), Pi 전원 시험 판정 셀프 체크 |
 
 검사를 더할 때는 `ci.yml`은 그대로 두고 **자기 파트의 `check.sh`에 명령을 한 줄씩 추가**합니다. 올리기 전에 `bash edge/check.sh`처럼 로컬에서 먼저 돌려 봅니다. 로봇·GPU·데이터가 필요한 검사는 CI에 넣지 않습니다.
 
