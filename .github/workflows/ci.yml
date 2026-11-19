@@ -1,0 +1,26 @@
+# 파트마다 <파트>/check.sh 를 따로 돌린다. 검사를 더할 때는 이 파일이 아니라 자기 check.sh를 고친다.
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  check:
+    name: ${{ matrix.part }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [common, firmware, edge, server, dashboard, ml, tools]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # Pi 5 (Raspberry Pi OS bookworm)와 같은 버전
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: bash ${{ matrix.part }}/check.sh

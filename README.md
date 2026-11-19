@@ -77,6 +77,19 @@ git push -u origin edge/thermo             # 3. GitHub에서 dev로 PR
 - 작업이 길어지면 중간에 `git pull origin dev`로 dev를 받아 충돌을 일찍 풉니다.
 - `dev`에서 여러 파트가 맞물려 동작하는 것을 확인하면 `dev` → `main` PR을 올립니다. 멘토링·시연 전에 한 번씩 합니다.
 
+## CI (자동 검사)
+
+`main` · `dev`로 push하거나 PR을 올리면 GitHub Actions가 파트마다 `<파트>/check.sh`를 따로 돌립니다(`.github/workflows/ci.yml`). PR 화면에 `edge`, `server`처럼 파트별로 결과가 뜹니다.
+
+| 파트 | 지금 하는 검사 |
+|---|---|
+| `common` | 약속 셀프 체크 |
+| `firmware` · `edge` · `server` · `ml` | 파이썬 문법 |
+| `dashboard` | 없음 |
+| `tools` | MechDog 시험 도구 셀프 체크 (파이썬 · JS) |
+
+검사를 더할 때는 `ci.yml`은 그대로 두고 **자기 파트의 `check.sh`에 명령을 한 줄씩 추가**합니다. 올리기 전에 `bash edge/check.sh`처럼 로컬에서 먼저 돌려 봅니다. 로봇·GPU·데이터가 필요한 검사는 CI에 넣지 않습니다.
+
 ## 같이 일하는 규칙
 
 - **자기 폴더만 고칩니다.** 다른 파트 폴더를 고칠 때는 담당에게 먼저 말합니다.
