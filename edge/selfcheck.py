@@ -31,7 +31,7 @@ class Cam:
         pass
 
     def latest(self, max_age=1.0):
-        return Frame(self.clock(), jpeg=SOI + b"photo" + EOI)
+        return Frame(self.clock(), jpeg=SOI + b"photo" + EOI, image="그림")  # cv2 없이 (CI)
 
 
 class Det1:
