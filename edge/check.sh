@@ -6,4 +6,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 python -m compileall -q edge
-# 예: pip install -r edge/requirements.txt && python -m edge.selfcheck
+python -m edge.selfcheck   # 장치·브로커·모델 없이 판단 흐름 시험 (표준 라이브러리만 씀)
