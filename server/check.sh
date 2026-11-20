@@ -6,4 +6,5 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 python -m compileall -q server
-# 예: pip install -r server/requirements.txt && python -m server.selfcheck
+python -m server.map_config
+python -m server.fleet

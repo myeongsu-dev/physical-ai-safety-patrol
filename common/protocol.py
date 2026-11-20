@@ -31,6 +31,7 @@ MODE_TOPIC = ROOT + "/mode"
 
 EVENT_TYPES = ("obstacle", "floor_object", "helmet", "heat", "flame")
 COMMANDS = ("patrol", "stop", "resume", "go", "wait", "dock", "guide")
+ROLES = ("A", "B")   # 순찰 동선(역할). 서버가 patrol 명령으로 정해 준다. 로봇 이름(ROBOT_ID)과는 별개
 MODES = ("normal", "evacuate")
 
 
@@ -57,9 +58,11 @@ def event(type, **fields):
 
 
 def command(name, **fields):
-    """서버 → Pi 명령 메시지. command("go", zone=7)"""
+    """서버 → Pi 명령 메시지. command("go", zone=7), command("patrol", role="A")"""
     if name not in COMMANDS:
         raise ValueError("모르는 명령: " + name)
+    if name == "patrol" and "role" in fields and fields["role"] not in ROLES:
+        raise ValueError("모르는 역할: " + str(fields["role"]))
     return {"cmd": name, **fields}
 
 
@@ -87,7 +90,8 @@ if __name__ == "__main__":
     assert e["type"] == "obstacle" and isinstance(e["ts"], int)
     assert unpack(pack(e)) == e
     assert command("go", zone=7) == {"cmd": "go", "zone": 7}
-    for bad in (lambda: event("smoke"), lambda: command("fly"), lambda: topic("B", "x"), lambda: unpack(b"[1]")):
+    assert command("patrol", role="B") == {"cmd": "patrol", "role": "B"}
+    for bad in (lambda: event("smoke"), lambda: command("fly"), lambda: command("patrol", role="C"), lambda: topic("B", "x"), lambda: unpack(b"[1]")):
         try:
             bad()
             raise AssertionError("ValueError가 나야 함")

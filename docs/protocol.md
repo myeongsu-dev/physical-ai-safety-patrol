@@ -27,7 +27,7 @@
 
 | 토픽 | 방향 · 주기 | 내용 |
 |---|---|---|
-| `potent/{로봇}/state` | Pi → 서버, 1초마다 | `marker`(지난 마커), `status`, `battery`(%), `sonar_cm`, `temp_c`, `version`(git 커밋) |
+| `potent/{로봇}/state` | Pi → 서버, 1초마다 | `marker`(지난 마커), `status`, `role`(받은 순찰 역할, 없으면 `null`), `battery`(%), `sonar_cm`, `temp_c`, `version`(git 커밋) |
 | `potent/{로봇}/event` | Pi → 서버, 생길 때 | `type`, `ts`, 값, `conf`(신뢰도), `photo`(사진 주소) |
 | `potent/{로봇}/cmd` | 서버 → Pi | `cmd` + 필요한 값 |
 | `potent/mode` | 서버 → 전체 | `{"mode": "normal"}` · `{"mode": "evacuate"}` |
@@ -35,7 +35,7 @@
 
 이벤트 `type`: `obstacle`(통로 막힘) · `floor_object`(바닥 물건) · `helmet`(안전모 미착용) · `heat`(과열 의심) · `flame`(불꽃)
 
-명령 `cmd`: `patrol` · `stop` · `resume` · `go`(`zone`) · `wait` · `dock` · `guide`(`arrow`: `left`·`right`·`up`·`x`)
+명령 `cmd`: `patrol`(`role`: `A`·`B`) · `stop` · `resume` · `go`(`zone`) · `wait` · `dock` · `guide`(`arrow`: `left`·`right`·`up`·`x`)
 
 ```json
 // potent/B/event
@@ -44,7 +44,12 @@
 
 // potent/A/cmd
 { "cmd": "go", "zone": 7 }
+
+// potent/C/cmd  (로봇 C에게 A 동선 순찰을 맡기며 출발)
+{ "cmd": "patrol", "role": "A" }
 ```
+
+**순찰 역할(`role`)**: 서버가 출발시킬 때 `patrol` 명령에 `role`로 동선을 정해 줍니다. `A`는 바깥 큰 고리, `B`는 안쪽 길을 포함한 고리입니다(마커 순서는 `server/map_config.py`). 로봇 이름(`ROBOT_ID`)과 역할은 별개라서, 어느 로봇이든 A나 B를 맡을 수 있습니다. Pi는 받은 역할을 기억해 `state`의 `role`로 알리고, 역할에 맞는 갈림길 동작을 합니다. 역할 없이 온 `patrol`은 지난 역할을 이어 갑니다.
 
 서버가 끊긴 동안 Pi는 이벤트를 쌓아 두었다가 다시 붙으면 보냅니다.
 
