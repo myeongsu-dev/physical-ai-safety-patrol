@@ -1,0 +1,20 @@
+# Pi 5가 켜지면 edge agent를 자동 실행 (죽으면 3초 뒤 다시)
+# 설치: sudo cp edge/potent-edge.service /etc/systemd/system/ && sudo systemctl daemon-reload
+#       sudo systemctl enable --now potent-edge
+# 업데이트 뒤: git pull && sudo systemctl restart potent-edge     기록: journalctl -u potent-edge -f
+# User·경로는 Pi에 맞게 고칠 것 (pi 계정, ~/physical-ai-safety-patrol, ~/venv)
+[Unit]
+Description=potent edge agent (Raspberry Pi 5)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/physical-ai-safety-patrol
+ExecStart=/home/pi/venv/bin/python -m edge.agent
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
