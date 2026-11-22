@@ -47,13 +47,17 @@ def main(port):
         s.reset_input_buffer()
         s.write(b"\x01")  # raw REPL
         read_until(s, b"raw REPL; CTRL-B to exit\r\n>")
-        run(s, "import os\ntry:\n os.rename('main.py','main_prev.py')\nexcept OSError:\n pass\nf=open('main.py','wb')\nw=f.write")
+        # main_new.py에 다 쓰고 크기가 맞을 때만 바꿔 끼움. 중간에 끊겨도 main.py와 main_prev.py는 그대로
+        run(s, "import os\nf=open('main_new.py','wb')\nw=f.write")
         for i in range(0, len(data), CHUNK):
             run(s, "w(%r)" % data[i:i + CHUNK])
         run(s, "f.close()")
-        size = int(run(s, "print(os.stat('main.py')[6])"))
+        size = int(run(s, "print(os.stat('main_new.py')[6])"))
         if size != len(data):
-            raise RuntimeError("크기가 다름: 보드 %d, 파일 %d (main_prev.py가 남아 있음)" % (size, len(data)))
+            raise RuntimeError("크기가 다름: 보드 %d, 파일 %d (main.py는 그대로)" % (size, len(data)))
+        # 파일 시스템에 따라 같은 이름이 있으면 rename이 실패하므로 지난 백업은 먼저 지움
+        run(s, "try:\n os.remove('main_prev.py')\nexcept OSError:\n pass\n"
+               "try:\n os.rename('main.py','main_prev.py')\nexcept OSError:\n pass\nos.rename('main_new.py','main.py')")
         s.write(b"exec(open('main.py').read())\x04")  # 재시작 없이 다시 실행. 끝을 기다리지 않음
         read_until(s, b"OK")
         print("올림: main.py %d바이트, 다시 실행함" % size)
