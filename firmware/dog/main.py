@@ -50,6 +50,14 @@ def r1(x):
 
 
 # ---------- 측정 채널 ----------
+SONAR_MAX_CM = 500  # 못 잰 값은 6553.5(0xFFFF mm)로 온다. 공장 앱도 5000mm 넘으면 자름
+
+
+def ch_sonar():
+    d = sonar.getDistance()
+    return r1(d) if 0 <= d <= SONAR_MAX_CM else -1
+
+
 def ch_line():
     c = cam.line_follow(line_color)
     return -1 if (c[0] == 0 and c[1] == 0) else c[0]
@@ -62,7 +70,7 @@ def ev_color():
 
 CHANNELS = {
     "bat": lambda: Hiwonder.Battery_power(),
-    "sonar": lambda: r1(sonar.getDistance()),
+    "sonar": ch_sonar,
 }
 if imu:
     CHANNELS["roll"] = lambda: r1(imu.read_angle()[0])
@@ -139,19 +147,21 @@ ARROWS = {"left": "<", "right": ">", "up": "^", "x": "X"}
 def c_led(mode, value=""):
     if not tube:
         raise ValueError("LED 없음")
-    if mode == "arrow":  # shortcut: 도트 매트릭스 그림 대신 글자 한 개. 매트릭스 함수 확인되면 그림으로
+    if mode == "arrow":  # shortcut: 화살표 그림 대신 글자 한 개. 그림이 필요하면 tube.setLedOnOff(x, y, 1)로 점을 찍음
         if value not in ARROWS:
             raise ValueError("모르는 화살표 " + value)
-        mode, value = "char", ARROWS[value]
+        mode, value = "text", ARROWS[value]
     if mode == "num":
         tube.showNum(int(value))
     elif mode == "bright":
         tube.setBrightness(int(value))
-    else:  # text·clear 등은 펌웨어에 그 함수가 있을 때만 (실기 확인 필요)
-        fn = {"text": "showString", "char": "showChar", "clear": "clear"}.get(mode)
-        if not fn or not hasattr(tube, fn):
-            raise ValueError("지원 안 함 " + mode)
-        getattr(tube, fn)(*([value] if value != "" else []))
+    elif mode == "clear":
+        tube.clear()
+    elif mode in ("text", "char"):
+        tube.clear()
+        tube.drawStr(0, 0, value)
+    else:
+        raise ValueError("지원 안 함 " + mode)
 
 
 def c_color(name):
@@ -274,7 +284,8 @@ def main():
 
 
 def stream():
-    while True:
+    me = st  # upload.py가 재시작 없이 main.py를 다시 실행하면 st가 새로 생긴다 → 이전 스레드는 끝남
+    while st is me:
         if st["period"]:
             t = time.ticks_diff(now(), st["t0"])
             if st["chans"]:
@@ -294,5 +305,11 @@ def stream():
 
 dog.set_default_pose()
 time.sleep(1)
-Hiwonder.startMain(main)
 Hiwonder.startMain(stream)
+# main은 스레드로 돌리지 않는다. 이 파일이 끝나면 REPL이 켜져 같은 시리얼에서 Pi 명령을 가로챈다.
+# Ctrl-C(upload.py)로 끊으면 멈추고 REPL로 돌아간다. 스트림도 꺼서 파일 올리는 대화에 섞이지 않게 한다.
+try:
+    main()
+finally:
+    stop()
+    st["period"] = 0
