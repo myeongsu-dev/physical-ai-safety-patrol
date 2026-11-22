@@ -6,4 +6,4 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 python -m compileall -q firmware
-# 예: python firmware/dog/sim_check.py
+python firmware/dog/sim_check.py
