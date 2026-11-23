@@ -8,7 +8,7 @@
 | `dog_link.py` | 보드와 `CMD` 주고받기 (USB 시리얼, DTR·RTS 끈 채 열기, 0.8초마다 살아 있음 알림, 끊기면 다시 열기) |
 | `camera.py` | XIAO 머리 카메라. 시리얼 JPEG 또는 UVC. 밀린 장은 버리고 가장 최근 장만 |
 | `thermo.py` | GY-906(MLX90614) 표면 온도 (I2C 1번, 주소 0x5A) |
-| `detect.py` | YOLO 추론. `models/helmet/버전/`, `models/flame/버전/`의 최신 모델. 5장 중 3장 확정 |
+| `detect.py` | YOLO 추론. 통합 모델(`0 fire`·`1 head`·`2 helmet`·`3 person`) 하나를 `models/safety/버전/`에서 불러 한 장에 한 번 추론. 클래스별 기준(`HELMET_CONF`·`FLAME_CONF`). 5장 중 3장 확정 |
 | `reporter.py` | MQTT state·event 보내기, cmd·mode 받기, 사진 `POST /photos`. 끊긴 동안 이벤트·사진을 쌓아 둠 |
 | `config.py` | `.env` 읽기와 기준값 (45℃, 5장 중 3장, 14·18cm …) |
 | `hwcheck.py` | 장치 하나씩 확인 (포트, 보드, 카메라, 온도, 추론 속도, MQTT) |
@@ -23,7 +23,7 @@
 | 순찰 (`patrol`·`go`·`dock`) | 보드에 `F` 선 따라가기, 15초 끝나기 전에 다시 보냄. `go`·`dock`은 목표 마커에서 멈춤 | state `status` |
 | 막힘 (보드 `E stop`, 또는 Pi가 초음파 14cm 안 3번 연속) | 사진을 안전모 모델로 봄. 사람이면 기다림(10초 넘게 서 있으면 보고), 아니면 보고 + 음성 1번. 18cm 밖이면 다시 걸음 | `obstacle` + 사진 |
 | 안전모 | 순찰 중 매 장 추론, 맨머리(`head`)가 최근 5장 중 3장 → 보고 + 음성 2번 (30초 안 반복 안 함) | `helmet` + 사진 |
-| 과열 | 45℃ 초과 → 멈춤 → 2초마다 3번 다시 재며 불꽃 모델 추론 → 다시 잰 값이 45℃ 초과면 보고. 60초 동안 서버 명령을 기다리다 없으면 하던 일로 | `heat`(+ 불꽃 확정 시 `flame`) + 사진 |
+| 과열 | 45℃ 초과 → 멈춤 → 2초마다 3번 다시 재며 통합 모델의 `fire` 판정 → 다시 잰 값이 45℃ 초과면 보고. 60초 동안 서버 명령을 기다리다 없으면 하던 일로 | `heat`(+ 불꽃 확정 시 `flame`) + 사진 |
 | 서버 `guide` | 정지 + `L\|arrow\|left` 같은 LED 화살표. `mode normal`이 오면 끔 | |
 
 state의 `status`: `idle`(대기) · `patrol`(순찰) · `blocked`(막힘 정지) · `heat_check`(과열 확인) · `go`(출동) · `guide`(대피 안내) · `dock`(복귀)
@@ -54,11 +54,11 @@ python -m edge.hwcheck ports             # 보드·XIAO가 몇 번 ttyACM인지 
 python -m edge.hwcheck dog               # V 응답, 측정값, 포트 열 때 보드가 다시 켜지지 않는지
 python -m edge.hwcheck cam               # 초당 장 수 (목표 15), cam_check.jpg
 python -m edge.hwcheck thermo
-python -m edge.hwcheck detect helmet     # 초당 장 수 (목표 10), --imgsz 320/640 비교
+python -m edge.hwcheck detect           # 초당 장 수 (목표 10), --imgsz 320/640 비교
 python -m edge.hwcheck mqtt              # 서버 노트북 브로커와 연결
 ```
 
-모델 두는 법: `models/helmet/v1/best_ncnn_model/` (`yolo export model=best.pt format=ncnn imgsz=320`으로 만든 폴더). 새 버전은 `v2/`로 추가하면 다음 실행부터 씁니다.
+모델 두는 법: `models/safety/v1/best_ncnn_model/` (`yolo export model=best.pt format=ncnn imgsz=320`으로 만든 폴더). 새 버전은 `v2/`로 추가하면 다음 실행부터 씁니다.
 
 ## 다른 파트와 맞출 것
 
