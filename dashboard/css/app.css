@@ -112,7 +112,8 @@ ul { list-style: none; margin: 0; padding: 0; }
   gap: calc(var(--gap) * 2);
   padding: calc(var(--gap) * 2);
 }
-.side { display: flex; flex-direction: column; gap: calc(var(--gap) * 2); }
+/* 오른쪽 칸은 늘 지도 옆. 관리자 화면에서 지도 아래에 경보 이력이 들어와도 밀려 내려가지 않게 */
+.side { grid-column: 2; grid-row: 1 / span 2; align-self: start; display: flex; flex-direction: column; gap: calc(var(--gap) * 2); }
 
 .panel {
   background: var(--panel);
@@ -193,6 +194,7 @@ ul { list-style: none; margin: 0; padding: 0; }
 @media (max-width: 900px) {
   .layout { grid-template-columns: 1fr; }
   .history-panel { grid-column: auto; }
+  .side { grid-column: auto; grid-row: auto; }
 }
 
 /* ---------- 안전 현황 ---------- */
