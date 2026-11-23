@@ -49,7 +49,7 @@ def git_version():
 class Agent:
     def __init__(self, dog, cam, thermo, reporter, model=None, clock=time.monotonic, version=None):
         self.dog, self.cam, self.thermo, self.reporter = dog, cam, thermo, reporter
-        self.model = model        # 통합 모델 (person·head·helmet·fire), 한 장에 한 번 추론
+        self.model = model        # 통합 모델 (0 fire · 1 head · 2 helmet · 3 person), 한 장에 한 번 추론
         self.clock = clock
         self.version = version or git_version()
         self.board = BoardState()

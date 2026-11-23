@@ -1,9 +1,10 @@
-"""YOLO 추론. models/의 통합 모델 하나(0 person · 1 head · 2 helmet · 3 fire)를 불러 한 장에 한 번 추론
+"""YOLO 추론. models/의 통합 모델 하나(0 fire · 1 head · 2 helmet · 3 person)를 불러 한 장에 한 번 추론
 
 모델 두는 곳: models/safety/{버전}/ 안에
   *_ncnn_model/ 폴더(Pi 5 CPU용, 우선) 또는 *.onnx 또는 *.pt
 버전 폴더는 이름순 마지막(v1 < v2 < v10)을 씀. 모델이 없으면 추론을 건너뛰고 경고만 남김.
-신뢰도 기준은 클래스마다 따로: person·head·helmet = HELMET_CONF, fire = FLAME_CONF.
+신뢰도 기준은 클래스마다 따로: head·helmet·person = HELMET_CONF, fire = FLAME_CONF.
+모델에 클래스 이름이 없으면(class0 … 처럼 번호만) 위 번호 순서로 이름을 붙임.
 
 속도 재기: python -m edge.hwcheck detect
 """
@@ -19,7 +20,7 @@ from edge import config
 log = logging.getLogger("edge.detect")
 
 SAFETY = "safety"                                   # models/ 아래 통합 모델 폴더 이름
-CLASSES = ("person", "head", "helmet", "fire")      # 학습 클래스 번호 순서 (변경 금지)
+CLASSES = ("fire", "head", "helmet", "person")      # 학습 클래스 번호 순서 0~3 (변경 금지)
 CLASS_CONF = {"person": config.HELMET_CONF, "head": config.HELMET_CONF,
               "helmet": config.HELMET_CONF, "fire": config.FLAME_CONF}
 
@@ -38,6 +39,21 @@ def _natural(s):
 def filter_conf(dets, class_conf):
     """클래스별 신뢰도 기준 미만은 버림. 기준이 없는 클래스(모델에 더 있는 클래스)도 버림"""
     return [d for d in dets if d.cls in class_conf and d.conf >= class_conf[d.cls]]
+
+
+def class_names(model_names):
+    """모델의 {번호: 이름} → 쓸 {번호: 이름}.
+    이름이 번호만 있는 기본값(class0, "0" …)이거나 비어 있으면 CLASSES 순서로 붙임"""
+    names = dict(model_names or {})
+    generic = all(re.fullmatch(r"(class)?\d+", str(v)) for v in names.values())
+    if not names or generic:
+        return dict(enumerate(CLASSES))
+    return names
+
+
+def class_order_problems(names):
+    """CLASSES 와 번호·이름이 어긋난 곳 목록 [(번호, 기대, 모델)]"""
+    return [(i, c, names.get(i)) for i, c in enumerate(CLASSES) if names.get(i) != c]
 
 
 def find_model(name, models_dir=config.MODELS_DIR):
@@ -62,6 +78,7 @@ class Detector:
         self.conf = min(conf.values()) if isinstance(conf, dict) else conf  # 모델에는 가장 낮은 기준으로
         self.path = find_model(name, models_dir)
         self.model = None
+        self.names = None  # {번호: 이름}
         self.ms = None  # 마지막 추론 시간
         if self.path is None:
             log.warning("%s 모델 없음 (%s/%s/버전/) → 추론 건너뜀", name, models_dir, name)
@@ -71,11 +88,12 @@ class Detector:
 
             self.model = YOLO(str(self.path), task="detect")
             log.info("%s 모델 %s", name, self.path)
-            names = set(getattr(self.model, "names", {}).values())
-            missing = [c for c in CLASSES if c not in names] if names else []
-            if missing:  # 예전 안전모·불꽃 따로 모델이나 클래스 이름이 다른 모델
-                log.warning("%s 모델에 없는 클래스 %s (모델 클래스 %s) → 그 판정은 동작 안 함",
-                            name, missing, sorted(names))
+            self.names = class_names(getattr(self.model, "names", None))
+            bad = class_order_problems(self.names)
+            if bad:  # 예전 따로 모델, 클래스 이름·번호 순서가 다른 모델
+                log.warning("%s 모델 클래스가 약속(%s)과 다름: %s → 판정은 모델의 이름으로 함",
+                            name, " · ".join(f"{i} {c}" for i, c in enumerate(CLASSES)),
+                            ", ".join(f"{i}번 {m!r}(기대 {c!r})" for i, c, m in bad))
         except Exception as e:
             log.warning("%s 모델 불러오기 실패: %s", name, e)
 
@@ -94,7 +112,7 @@ class Detector:
         t = time.perf_counter()
         r = self.model.predict(image, imgsz=self.imgsz, conf=self.conf, verbose=False)[0]
         self.ms = (time.perf_counter() - t) * 1000
-        names = r.names
+        names = self.names or class_names(r.names)
         out = []
         for b in r.boxes:
             x1, y1, x2, y2 = (float(v) for v in b.xyxy[0].tolist())

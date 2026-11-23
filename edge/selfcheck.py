@@ -6,7 +6,8 @@ from common import protocol
 from edge import config
 from edge.agent import Agent
 from edge.camera import SOI, EOI, Frame, split_jpegs
-from edge.detect import CLASS_CONF, Det, Voter, filter_conf, find_model, has_person, no_helmet
+from edge.detect import (CLASS_CONF, CLASSES, Det, Voter, class_names, class_order_problems, filter_conf,
+                         find_model, has_person, no_helmet)
 from edge.dog_link import BoardState, FakeDog, battery_pct
 from edge.reporter import Reporter, photo_name, photo_url_from
 from edge.thermo import FakeThermo, raw_to_c
@@ -73,6 +74,15 @@ def check_parts():
     kept = filter_conf([Det("head", 0.45, ()), Det("fire", 0.45, ()), Det("vest", 0.99, ())], cc)
     assert [d.cls for d in kept] == ["fire"], kept
     assert set(CLASS_CONF) == {"person", "head", "helmet", "fire"}
+
+    # 클래스 번호: 0 fire · 1 head · 2 helmet · 3 person. 이름 없는 모델은 번호로 이름을 붙임
+    assert CLASSES == ("fire", "head", "helmet", "person")
+    assert class_names({0: "class0", 1: "class1", 2: "class2", 3: "class3"}) == dict(enumerate(CLASSES))
+    assert class_names(None) == dict(enumerate(CLASSES))
+    good = {0: "fire", 1: "head", 2: "helmet", 3: "person"}
+    assert class_names(good) == good and class_order_problems(good) == []
+    old = {0: "person", 1: "head", 2: "helmet", 3: "fire"}   # 예전 순서 → 0번·3번 어긋남 알림
+    assert [i for i, _, _ in class_order_problems(class_names(old))] == [0, 3]
     assert has_person([Det("helmet", 0.9, ())]) and not has_person([Det("fire", 0.9, ())])
 
     assert photo_name("B", 0, ()).startswith("B_") and photo_name("B", 0, ()).endswith(".jpg")

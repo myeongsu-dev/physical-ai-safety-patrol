@@ -8,7 +8,7 @@
 | `dog_link.py` | 보드와 `CMD` 주고받기 (USB 시리얼, DTR·RTS 끈 채 열기, 0.8초마다 살아 있음 알림, 끊기면 다시 열기) |
 | `camera.py` | XIAO 머리 카메라. 시리얼 JPEG 또는 UVC. 밀린 장은 버리고 가장 최근 장만 |
 | `thermo.py` | GY-906(MLX90614) 표면 온도 (I2C 1번, 주소 0x5A) |
-| `detect.py` | YOLO 추론. 통합 모델(`person`·`head`·`helmet`·`fire`) 하나를 `models/safety/버전/`에서 불러 한 장에 한 번 추론. 클래스별 기준(`HELMET_CONF`·`FLAME_CONF`). 5장 중 3장 확정 |
+| `detect.py` | YOLO 추론. 통합 모델(`0 fire`·`1 head`·`2 helmet`·`3 person`) 하나를 `models/safety/버전/`에서 불러 한 장에 한 번 추론. 클래스별 기준(`HELMET_CONF`·`FLAME_CONF`). 5장 중 3장 확정 |
 | `reporter.py` | MQTT state·event 보내기, cmd·mode 받기, 사진 `POST /photos`. 끊긴 동안 이벤트·사진을 쌓아 둠 |
 | `config.py` | `.env` 읽기와 기준값 (45℃, 5장 중 3장, 14·18cm …) |
 | `hwcheck.py` | 장치 하나씩 확인 (포트, 보드, 카메라, 온도, 추론 속도, MQTT) |
