@@ -1,12 +1,14 @@
 // 기본 화면. 서버·로봇 연결 상태, 현재 모드, 안전 현황, 로봇 현황, 최근 경보를 보여 준다.
 // 지도는 아직 바탕(구역, 통로, 마커, 비상구, 충전 스테이션)만 그린다.
 
-import { createStore, apply, setServer, connectionSummary, safetySummary, openAlerts } from "./store.js";
+import { createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace } from "./store.js";
 import { connect } from "./conn.js";
-import { VIEWBOX, baseMap, legendHtml } from "./map.js";
+import { VIEWBOX, baseMap, legendHtml, robotLayer } from "./map.js";
 
 const store = createStore();
 const params = new URLSearchParams(location.search);
+// 주소에 ?admin을 붙이면 관리자 화면. 잠금은 서버와 정한 뒤에 붙인다 (README "화면")
+const admin = params.has("admin");
 
 const STATUS_TEXT = { connecting: "연결 중", open: "연결됨", closed: "끊김" };
 const MODE_TEXT = { normal: "평상시", evacuate: "대피" };
@@ -68,6 +70,7 @@ function render() {
   renderSafety(serverOpen, now);
   renderRobots(s, serverOpen, now);
   renderAlerts();
+  if (admin) renderRobotLayer(s);
 }
 
 // 현재 모드와 안전 현황. 서버가 끊겨 있으면 모를 값은 "-"
@@ -102,11 +105,9 @@ function renderRobots(s, serverOpen, now) {
         connText = r.online ? "연결" : "끊김";
       }
 
-      let state = "-";
-      if (msg) {
-        state = ROBOT_STATUS_TEXT[msg.status] ?? msg.status ?? "-";
-        if (msg.status === "patrol" && msg.role) state += ` (${msg.role} 경로)`;
-      }
+      // 오른쪽 위: 연결돼 있으면 상태, 아니면 끊김·확인 불가
+      let state = msg ? ROBOT_STATUS_TEXT[msg.status] ?? msg.status ?? "-" : "-";
+      if (!r.online) state = connText;
 
       const meta = [];
       if (msg && msg.battery != null) {
@@ -114,7 +115,6 @@ function renderRobots(s, serverOpen, now) {
         const bcls = b <= BATTERY_EMERGENCY ? "empty" : b <= BATTERY_RETURN ? "low" : "";
         meta.push(`<span class="battery ${bcls}">배터리 ${esc(b)}%</span>`);
       }
-      if (msg && msg.marker != null) meta.push(`마커 ${esc(msg.marker)}`);
       if (serverOpen && !r.online) {
         if (r.lastSeen) meta.push(`마지막 수신 ${ago(r.lastSeen, now)} 전`);
         else if (!r.known) meta.push("수신 기록 없음");
@@ -124,12 +124,20 @@ function renderRobots(s, serverOpen, now) {
 
       return `<li class="${cls}">
         <div class="top"><span class="dot"></span><span class="name">${esc(r.name)}</span>
-          <span class="conn-text">${connText}</span></div>
-        <div class="state">${esc(state)}</div>
+          <span class="state">${esc(state)}</span></div>
+        <div class="place">${esc(robotPlace(msg))}</div>
         <div class="meta">${meta.join(" · ")}</div>
       </li>`;
     })
     .join("");
+}
+
+// 지도 위 로봇 위치 (관리자 화면만)
+function renderRobotLayer(s) {
+  const list = s.robots
+    .filter((r) => store.robots[r.name]?.marker != null)
+    .map((r) => ({ name: r.name, marker: store.robots[r.name].marker, online: s.server === "open" && r.online }));
+  document.getElementById("map").querySelector(".robots").innerHTML = robotLayer(list);
 }
 
 // 최근 경보 (처리 완료 안 된 것, 새것부터)
@@ -186,8 +194,12 @@ function esc(x) {
 // 지도 바탕은 한 번만 그린다
 const mapEl = document.getElementById("map");
 mapEl.setAttribute("viewBox", VIEWBOX);
-mapEl.innerHTML = baseMap();
-document.getElementById("legend").innerHTML = legendHtml();
+mapEl.innerHTML = baseMap() + '<g class="robots"></g>';
+document.getElementById("legend").innerHTML = legendHtml({ robots: admin });
+if (admin) {
+  document.title = "안전 순찰 관제 (관리자)";
+  document.getElementById("view-name").hidden = false;
+}
 
 // 위의 함수와 값이 모두 준비된 뒤에 연결을 시작한다 (연결 중에도 바로 render를 부르기 때문)
 const conn = connect({

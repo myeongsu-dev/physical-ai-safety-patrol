@@ -9,6 +9,7 @@ const C = {
   bg: "#08111f", floor: "#0b1729", grid: "#13233a", wall: "#9fb2c8",
   rack: "#11213a", rackLine: "#34506f", fg: "#dbe7f5", muted: "#8aa0b9",
   green: "#3ee07a", blue: "#2aa6ff", yellow: "#f5c542", one: "#dfe9f5",
+  cyan: "#3ee0ff", off: "#8aa0b9",
 };
 
 export const VIEWBOX = "40 40 1920 1330";
@@ -99,17 +100,52 @@ export function baseMap() {
   return s;
 }
 
+// 로봇 위치 층 (관리자 화면). robots: [{ name, marker, online }]
+// 지난 마커 위치에 그린다. 같은 마커에 여러 대면 옆으로 나란히.
+// 끊긴 로봇은 회색 점선으로 마지막 위치에 그린다.
+export function robotLayer(robots) {
+  const byMarker = {};
+  for (const r of robots) {
+    if (!(r.marker in MARKER_POS)) continue;
+    (byMarker[r.marker] ??= []).push(r);
+  }
+  let s = "";
+  for (const [marker, list] of Object.entries(byMarker)) {
+    const [mx, my] = MARKER_POS[marker];
+    list.forEach((r, i) => {
+      const x = mx + (i - (list.length - 1) / 2) * 70;
+      const y = my - 62;
+      const color = r.online ? C.cyan : C.off;
+      const dash = r.online ? "" : ' stroke-dasharray="8 6"';
+      s += `<g class="robot">`;
+      s += `<line x1="${x}" y1="${y + 27}" x2="${mx}" y2="${my - 24}" stroke="${color}" stroke-width="3"${dash}/>`;
+      s += `<circle cx="${x}" cy="${y}" r="27" fill="#062033" stroke="${color}" stroke-width="5"${dash}/>`;
+      s += `<text x="${x}" y="${y + 10}" font-size="28" font-weight="700" text-anchor="middle" fill="#fff">${esc(r.name)}</text>`;
+      s += "</g>";
+    });
+  }
+  return s;
+}
+
+function esc(x) {
+  return String(x).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
 function swatch(inner) {
   return `<svg width="30" height="18" viewBox="0 0 30 18" aria-hidden="true">${inner}</svg>`;
 }
 
 // 범례 HTML
-export function legendHtml() {
+export function legendHtml({ robots = false } = {}) {
   const items = [
     swatch(`<line x1="1" y1="9" x2="29" y2="9" stroke="${C.one}" stroke-width="3" stroke-dasharray="7 4"/>`) + "순찰 통로",
     swatch(`<rect x="7" y="1" width="16" height="16" rx="3" fill="#0b1626" stroke="${C.yellow}" stroke-width="2"/>`) + "마커 번호 1~15",
     swatch(`<rect x="3" y="2" width="24" height="14" fill="#0f3a24" stroke="${C.green}" stroke-width="2"/>`) + "비상구",
     swatch(`<rect x="3" y="2" width="24" height="14" fill="none" stroke="${C.wall}" stroke-width="2" stroke-dasharray="4 3"/>`) + "충전 스테이션",
   ];
+  if (robots) {
+    items.push(swatch(`<circle cx="15" cy="9" r="7" fill="#062033" stroke="${C.cyan}" stroke-width="2"/>`) + "로봇 위치 (지난 마커)");
+    items.push(swatch(`<circle cx="15" cy="9" r="7" fill="#062033" stroke="${C.off}" stroke-width="2" stroke-dasharray="3 2"/>`) + "끊긴 로봇 (마지막 위치)");
+  }
   return items.map((t) => `<span>${t}</span>`).join("");
 }

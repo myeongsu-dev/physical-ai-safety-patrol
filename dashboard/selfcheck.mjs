@@ -9,7 +9,8 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN } from "./js/mapdata.js";
 import { FakeServer, EVENT_TYPES } from "./js/fake.js";
-import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, ONLINE_SEC } from "./js/store.js";
+import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, ONLINE_SEC } from "./js/store.js";
+import { robotLayer, MARKER_POS } from "./js/map.js";
 
 // ---------- 1) 지도 데이터 ----------
 function readMapConfig() {
@@ -210,6 +211,27 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
   assert.equal(safetySummary(st, T + 7000).level, "unknown");
 }
 
+// ---------- 로봇 위치: 카드 글자와 지도 ----------
+assert.equal(robotPlace({ marker: 8, status: "patrol", role: "A" }), "A 경로 · 마커 8");
+assert.equal(robotPlace({ marker: 15, status: "idle", role: null }), "충전 스테이션");
+assert.equal(robotPlace({ marker: 14, status: "dock" }), "마커 14");
+assert.equal(robotPlace(undefined), "-");
+assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(Number)); // 지도 마커 번호 = map_config 번호
+{
+  const svg = robotLayer([
+    { name: "A", marker: 8, online: true },
+    { name: "B", marker: 15, online: true },
+    { name: "D", marker: 15, online: false },
+    { name: "X", marker: 99, online: true }, // 없는 마커는 안 그림
+  ]);
+  assert.equal((svg.match(/class="robot"/g) || []).length, 3);
+  assert.ok(svg.includes(">A</text>") && svg.includes(">D</text>") && !svg.includes(">X</text>"));
+  assert.ok(svg.includes("stroke-dasharray"), "끊긴 로봇은 점선");
+  // 같은 마커(15)에 두 대면 x가 다르다
+  const xs = [...svg.matchAll(/<circle cx="([\d.-]+)"/g)].map((m) => Number(m[1]));
+  assert.equal(new Set(xs).size, 3);
+}
+
 // ---------- 5) 화면 파일이 오류 없이 돌아가는지 ----------
 // 브라우저 대신 아주 작은 가짜 document를 두고 js/app.js를 ?fake로 불러 본다
 {
@@ -242,6 +264,8 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
   assert.match(el("alerts").innerHTML, /화재/);
   globalThis.fake.tick(); // 로봇 상태는 다음 state(1초 뒤)에 바뀌어 온다
   assert.match(el("robot-list").innerHTML, /대피 안내/);
+  assert.match(el("robot-list").innerHTML, /충전 스테이션/); // C·D는 충전 스테이션에서 대기
+  assert.equal(el("map .robots").innerHTML, ""); // 기본 화면에는 로봇 위치 없음
   // 지도: 마커 15개, 구역 5개, 경보·로봇 표시는 없음
   const svg = el("map").innerHTML;
   assert.equal(el("map").viewBox, "40 40 1920 1330");

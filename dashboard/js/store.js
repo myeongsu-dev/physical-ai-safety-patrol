@@ -1,6 +1,8 @@
 // 화면 상태. 서버에서 받은 메시지를 모아 두고, 화면에 보여 줄 값을 계산한다.
 // 화면(DOM)은 건드리지 않는다. 그래서 selfcheck.mjs에서 node로 바로 시험할 수 있다.
 
+import { DOCK_MARKER } from "./mapdata.js";
+
 // 팀 로봇 4대 (Pi의 ROBOT_ID). 서버가 아직 한 번도 못 본 로봇도 "끊김"으로 센다
 export const ROBOTS = ["A", "B", "C", "D"];
 
@@ -80,6 +82,15 @@ export function openAlerts(store, limit = 5) {
     .filter((e) => e.type !== "helmet")
     .sort((a, b) => b.id - a.id)
     .slice(0, limit);
+}
+
+// 로봇 위치를 글자로. 예: "A 경로 · 마커 8", "충전 스테이션", "마커 14"
+// 충전 중인지는 서버가 알려 주지 않아서 짐작하지 않는다
+export function robotPlace(msg) {
+  if (!msg || msg.marker == null) return "-";
+  if (msg.marker === DOCK_MARKER) return "충전 스테이션";
+  if (msg.status === "patrol" && msg.role) return `${msg.role} 경로 · 마커 ${msg.marker}`;
+  return `마커 ${msg.marker}`;
 }
 
 // 화면에 보여 줄 로봇 연결 요약
