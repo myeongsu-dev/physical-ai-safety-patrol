@@ -42,7 +42,7 @@ export function connect({ fake = false, onMessage, onStatus }) {
 
   return {
     fake: server, // 가짜 서버일 때만. 개발자 도구에서 fake.emit("heat") 처럼 쓴다
-    // 화면 → 서버 요청 (처리 완료, 대피 해제 등)
+    // 화면 → 서버 요청 (경보 해제, 대피 해제 등)
     request(path, opts) {
       return server ? server.fetch(path, opts) : fetch(path, opts);
     },

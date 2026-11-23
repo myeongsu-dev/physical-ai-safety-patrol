@@ -2,7 +2,7 @@
 //
 // 진짜 서버와 같은 모양으로 흉내 낸다.
 //   - fake.socket()  : new WebSocket(".../ws") 대신. onopen · onmessage · onclose · close()
-//                      붙자마자 로봇 state 전부, mode, 처리 완료 안 된 경보를 보내고, 그 뒤로 새 메시지
+//                      붙자마자 로봇 state 전부, mode, 해제 안 된 경보를 보내고, 그 뒤로 새 메시지
 //   - fake.fetch()   : fetch() 대신. POST /events/{id}/check, POST /mode, GET /status
 //
 // 시험용 조작 (진짜 서버에는 없음)
@@ -188,7 +188,7 @@ export class FakeServer {
     this.rng = makeRng(seed);
     this.defer = defer;
     this.mode = "normal";
-    this.events = [];       // 처리 완료 여부와 상관없이 모두
+    this.events = [];       // 해제 여부와 상관없이 모두
     this.nextId = 1;
     this.sockets = new Set();
     this.timer = null;

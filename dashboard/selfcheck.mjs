@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN } from "./js/mapdata.js";
 import { FakeServer, EVENT_TYPES } from "./js/fake.js";
-import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, ONLINE_SEC } from "./js/store.js";
+import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, ONLINE_SEC } from "./js/store.js";
 import { robotLayer, MARKER_POS } from "./js/map.js";
 
 // ---------- 1) 지도 데이터 ----------
@@ -76,7 +76,7 @@ const states = a.msgs.filter((m) => m.kind === "state");
 assert.ok(states.length >= 30 * 4 - 10, "state가 1초마다 오지 않음");
 assert.ok(states.filter((m) => m.robot === "A").some((m) => m.marker !== DOCK_MARKER), "A가 안 움직임");
 
-// 경보: 모양, 처리 완료하면 같은 id가 checked:true로 다시 옴
+// 경보: 모양, 해제하면 같은 id가 checked:true로 다시 옴
 a.msgs.length = 0;
 for (const t of EVENT_TYPES) fake.emit(t, "A");
 const evs = a.msgs.filter((m) => m.kind === "event");
@@ -95,7 +95,7 @@ const again = a.msgs.filter((m) => m.kind === "event" && m.id === first.id);
 assert.equal(again.at(-1).checked, true);
 assert.equal((await fake.fetch("/events/9999/check", { method: "POST" })).status, 404);
 
-// 새로 붙으면 처리 완료 안 된 경보만 받는다
+// 새로 붙으면 해제 안 된 경보만 받는다
 const b = listen(fake.socket());
 flush();
 const openIds = b.msgs.filter((m) => m.kind === "event").map((m) => m.id);
@@ -180,7 +180,7 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
   assert.equal(s.level, "caution");
   assert.deepEqual(s.counts, { fire: 1, obstacle: 1, floor: 1 });
 
-  // 처리 완료하면 빠짐
+  // 해제하면 빠짐
   for (const id of [2, 3, 4]) apply(st, { kind: "event", id, checked: true }, T);
   assert.equal(safetySummary(st, T).level, "safe");
 
@@ -199,7 +199,7 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
   assert.equal(safetySummary(st, T + 6000).level, "fire");
   apply(st, { kind: "mode", mode: "normal" });
 
-  // 최근 경보: 처리 완료 안 된 것만, 새것부터, 안전모 미착용 뺌
+  // 최근 경보: 해제 안 된 것만, 새것부터, 안전모 미착용 뺌
   apply(st, { kind: "event", id: 6, type: "obstacle", checked: false });
   apply(st, { kind: "event", id: 7, type: "heat", checked: false });
   assert.deepEqual(openAlerts(st).map((e) => e.id), [7, 6]);
@@ -216,6 +216,8 @@ assert.equal(robotPlace({ marker: 8, status: "patrol", role: "A" }), "A 경로 �
 assert.equal(robotPlace({ marker: 15, status: "idle", role: null }), "충전 스테이션");
 assert.equal(robotPlace({ marker: 14, status: "dock" }), "마커 14");
 assert.equal(robotPlace(undefined), "-");
+// 화면 이름: A~D → MD-1~MD-4, 모르는 이름은 그대로
+assert.deepEqual(["A", "B", "C", "D", "E"].map(robotLabel), ["MD-1", "MD-2", "MD-3", "MD-4", "E"]);
 assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(Number)); // 지도 마커 번호 = map_config 번호
 {
   const svg = robotLayer([
@@ -228,7 +230,7 @@ assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(N
   assert.ok(svg.includes(">A</text>") && svg.includes(">D</text>") && !svg.includes(">X</text>"));
   assert.ok(svg.includes("stroke-dasharray"), "끊긴 로봇은 점선");
   // 같은 마커(15)에 두 대면 x가 다르다
-  const xs = [...svg.matchAll(/<circle cx="([\d.-]+)"/g)].map((m) => Number(m[1]));
+  const xs = [...svg.matchAll(/<rect x="([\d.-]+)" y="[\d.-]+" width="120"/g)].map((m) => Number(m[1]));
   assert.equal(new Set(xs).size, 3);
 }
 
@@ -281,6 +283,7 @@ async function bootApp(search, tag) {
   assert.equal(el("server .value").textContent, "연결됨");
   assert.equal(el("robots .value").textContent, "4/4대");
   assert.equal((el("robot-list").innerHTML.match(/<li /g) || []).length, 4);
+  for (const n of ["MD-1", "MD-2", "MD-3", "MD-4"]) assert.ok(el("robot-list").innerHTML.includes(`>${n}</span>`));
   assert.equal(el("mode").textContent, "평상시");
   assert.equal(el("evacuate").hidden, true);
   globalThis.fake.fire("A");
@@ -309,12 +312,12 @@ async function bootApp(search, tag) {
   app.stop();
 }
 
-// ---------- 6) 관리자 화면: 경보 상세와 처리 완료 ----------
+// ---------- 6) 관리자 화면: 경보 상세와 경보 해제 ----------
 {
   const app = await bootApp("?fake&admin", "admin");
   const { el, fake } = app;
   assert.equal(el("detail-panel").hidden, false);
-  assert.match(el("detail").innerHTML, /처리할 경보가 없습니다/);
+  assert.match(el("detail").innerHTML, /남은 경보가 없습니다/);
 
   // 경보가 오면 가장 새 경보가 상세에 뜬다
   const ob = fake.emit("obstacle", "A");
@@ -334,7 +337,7 @@ async function bootApp(search, tag) {
   assert.match(el("detail").innerHTML, new RegExp(`data-check="${ob.id}"`));
   assert.match(el("alerts").innerHTML, /class="selected"/);
 
-  // 처리 완료 → 서버에 보내고 목록에서 빠짐
+  // 경보 해제 → 서버에 보내고 목록에서 빠짐
   await app.click({ check: String(ob.id) });
   await tickWait();
   assert.equal(fake.events.find((e) => e.id === ob.id).checked, true);
@@ -356,15 +359,17 @@ async function bootApp(search, tag) {
   await tickWait();
   assert.equal(fake.events.find((e) => e.id === fire.id).checked, true);
 
-  // 처리 완료를 못 보내면 알려 준다 (없는 경보 번호 → 404)
+  // 경보 해제를 못 보내면 알려 준다 (없는 경보 번호 → 404)
   const heatId = heat.id;
   fake.events.find((e) => e.id === heatId).id = 9999; // 서버 쪽에서만 번호가 바뀐 것처럼
   await app.click({ check: String(heatId) });
   await tickWait();
-  assert.match(el("detail").innerHTML, /처리 완료를 보내지 못했습니다 \(서버 응답 404\)/);
+  assert.match(el("detail").innerHTML, /경보 해제를 보내지 못했습니다 \(서버 응답 404\)/);
 
-  // 지도에 로봇 위치
+  // 지도에 로봇 위치 (화면 이름으로)
   assert.equal((el("map .robots").innerHTML.match(/class="robot"/g) || []).length, 4);
+  assert.ok(el("map .robots").innerHTML.includes(">MD-1</text>"));
+  assert.match(el("detail").innerHTML, /<dt>로봇<\/dt><dd>MD-\d<\/dd>/);
   app.stop();
 }
 
@@ -434,7 +439,7 @@ class FakeAudioContext {
   await app.click({ alert: String(heat.id) });
   assert.ok(!el("alerts").innerHTML.includes("blink"));
 
-  // 화재 → 팝업 + 경보음 3번. 팝업에서 한 번 더 확인하고 처리 완료하면 팝업이 닫힌다
+  // 화재 → 팝업 + 경보음 3번. 팝업에서 한 번 더 확인하고 해제하면 팝업이 닫힌다
   const fire = fake.emit("flame", "C");
   await tickWait();
   assert.equal(beeps, 6);
@@ -463,6 +468,67 @@ class FakeAudioContext {
 
   app.stop();
   delete globalThis.AudioContext;
+}
+
+// ---------- 9) 관리자 화면: 대피 해제, 경보 이력 ----------
+{
+  const app = await bootApp("?fake&admin", "evac");
+  const { el, fake } = app;
+  await tickWait(550);
+
+  // 대피 해제: 대피 중에만 버튼, 한 번 더 확인
+  assert.equal(el("evacuate-actions").innerHTML, "");
+  fake.robots.A.role = "A";
+  fake.tick(); // A가 A 경로를 맡고 있다는 state
+  const fire = fake.fire("A");
+  await tickWait();
+  assert.match(el("evacuate-actions").innerHTML, /data-evac="1"/);
+  await app.click({ evac: "1" });
+  assert.match(el("evacuate-actions").innerHTML, /현장 안전을 확인했나요/);
+  await app.click({ evacCancel: "1" });
+  assert.ok(!el("evacuate-actions").innerHTML.includes("현장 안전을"));
+  await app.click({ evac: "1" });
+  await app.click({ evac: "1", sure: "1" });
+  await tickWait();
+  assert.equal(fake.mode, "normal");
+  assert.equal(el("evacuate").hidden, true);
+  assert.equal(el("mode").textContent, "평상시");
+
+  // 경보 이력: 사진이 있으면 "사진 보기" 버튼, 없으면 "사진 없음"
+  assert.match(el("history").innerHTML, /사진 없음/);
+  const orig = fake.robots.B.eventFields.bind(fake.robots.B);
+  fake.robots.B.eventFields = (t) => ({ ...orig(t), photo: "/photos/B_1123_120000.jpg" });
+  fake.emit("obstacle", "B");
+  await tickWait();
+  assert.match(el("history").innerHTML, /<a class="photo-btn" href="\/photos\/B_1123_120000.jpg" target="_blank"/);
+
+  // 경보 이력: 해제한 경보도 남고, 눌러 보면 상세에 버튼 없이 해제 시각
+  assert.match(el("history").innerHTML, new RegExp(`data-alert="${fire.id}"`));
+  assert.match(el("history").innerHTML, /해제 전/);
+  assert.match(el("history").innerHTML, /A 경로/);
+  await app.click({ check: String(fire.id) });
+  await app.click({ check: String(fire.id), sure: "1" });
+  await tickWait();
+  assert.match(el("history").innerHTML, /경보 해제 \d\d:\d\d:\d\d/);
+  assert.ok(!el("alerts").innerHTML.includes(`data-alert="${fire.id}"`)); // 최근 경보에서는 빠짐
+  await app.click({ alert: String(fire.id) });
+  const d = el("detail").innerHTML;
+  assert.match(d, /done-text/);
+  assert.ok(!d.includes("data-check"));
+  assert.match(d, /<dt>경로<\/dt><dd>A 경로<\/dd>/);
+  app.stop();
+}
+
+// 경보 이력: 해제된 경보도 남고, 해제 시각은 해제 소식을 받은 시각
+{
+  const st = createStore();
+  apply(st, { kind: "event", id: 1, robot: "A", type: "heat", checked: false }, 1000);
+  apply(st, { kind: "event", id: 1, robot: "A", type: "heat", checked: true }, 5000);
+  const { alertHistory } = await import("./js/store.js");
+  const h = alertHistory(st);
+  assert.equal(h.length, 1);
+  assert.equal(h[0].checkedAt, 5000);
+  assert.equal(h[0].event.checked, true);
 }
 
 console.log("dashboard selfcheck OK");

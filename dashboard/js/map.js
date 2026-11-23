@@ -100,7 +100,7 @@ export function baseMap() {
   return s;
 }
 
-// 로봇 위치 층 (관리자 화면). robots: [{ name, marker, online }]
+// 로봇 위치 층 (관리자 화면). robots: [{ name(화면 이름), marker, online }]
 // 지난 마커 위치에 그린다. 같은 마커에 여러 대면 옆으로 나란히.
 // 끊긴 로봇은 회색 점선으로 마지막 위치에 그린다.
 export function robotLayer(robots) {
@@ -113,13 +113,13 @@ export function robotLayer(robots) {
   for (const [marker, list] of Object.entries(byMarker)) {
     const [mx, my] = MARKER_POS[marker];
     list.forEach((r, i) => {
-      const x = mx + (i - (list.length - 1) / 2) * 70;
+      const x = mx + (i - (list.length - 1) / 2) * 130;
       const y = my - 62;
       const color = r.online ? C.cyan : C.off;
       const dash = r.online ? "" : ' stroke-dasharray="8 6"';
       s += `<g class="robot">`;
       s += `<line x1="${x}" y1="${y + 27}" x2="${mx}" y2="${my - 24}" stroke="${color}" stroke-width="3"${dash}/>`;
-      s += `<circle cx="${x}" cy="${y}" r="27" fill="#062033" stroke="${color}" stroke-width="5"${dash}/>`;
+      s += `<rect x="${x - 60}" y="${y - 27}" width="120" height="54" rx="27" fill="#062033" stroke="${color}" stroke-width="5"${dash}/>`;
       s += `<text x="${x}" y="${y + 10}" font-size="28" font-weight="700" text-anchor="middle" fill="#fff">${esc(r.name)}</text>`;
       s += "</g>";
     });

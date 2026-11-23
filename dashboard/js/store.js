@@ -6,6 +6,14 @@ import { DOCK_MARKER } from "./mapdata.js";
 // 팀 로봇 4대 (Pi의 ROBOT_ID). 서버가 아직 한 번도 못 본 로봇도 "끊김"으로 센다
 export const ROBOTS = ["A", "B", "C", "D"];
 
+// 화면에 보이는 로봇 이름. 서버·Pi와 주고받는 이름(ROBOT_ID)은 A~D 그대로 두고 화면에서만 바꾼다.
+// 팀 공통 이름은 아직 미정 (README "화면 용어")
+export const ROBOT_LABEL = { A: "MD-1", B: "MD-2", C: "MD-3", D: "MD-4" };
+
+export function robotLabel(name) {
+  return ROBOT_LABEL[name] ?? String(name);
+}
+
 // 이 시간 안에 state가 와야 연결된 것으로 본다. server/fleet.py의 ONLINE_SEC과 같게 둔다
 export const ONLINE_SEC = 5;
 
@@ -16,7 +24,10 @@ export function createStore() {
     robots: {}, // 로봇 이름 → 마지막 state 메시지
     seen: {}, // 로봇 이름 → state를 받은 시각 (ms). 서버가 끊겨 있다고 알려 주면 null
     mode: "normal",
-    events: new Map(), // id → 처리 완료 안 된 경보
+    events: new Map(), // id → 해제 안 된 경보
+    // 경보 이력: id → { event, role, checkedAt }. 해제된 경보도 남긴다.
+    // 서버에 지난 경보를 꺼내 주는 요청이 아직 없어서, 이 화면을 연 뒤에 받은 경보만 남는다
+    history: new Map(),
   };
 }
 
@@ -38,7 +49,32 @@ export function apply(store, msg, now = Date.now()) {
   } else if (msg.kind === "event") {
     if (msg.checked) store.events.delete(msg.id);
     else store.events.set(msg.id, msg);
+    remember(store, msg, now);
   }
+}
+
+export const HISTORY_MAX = 200;
+
+function remember(store, msg, now) {
+  const prev = store.history.get(msg.id);
+  store.history.set(msg.id, {
+    event: { ...(prev?.event ?? {}), ...msg },
+    // 경보에는 경로가 없어서, 받은 순간 그 로봇이 맡고 있던 경로를 같이 적어 둔다
+    role: prev?.role ?? store.robots[msg.robot]?.role ?? null,
+    // 서버가 해제 시각을 보내지 않아서, 이 화면이 해제 소식을 받은 시각
+    checkedAt: msg.checked ? (prev?.checkedAt ?? now) : null,
+  });
+  while (store.history.size > HISTORY_MAX) {
+    store.history.delete(Math.min(...store.history.keys()));
+  }
+}
+
+// 경보 이력, 새것부터. 안전모 미착용은 뺀다 (openAlerts와 같은 기준)
+export function alertHistory(store, limit = 50) {
+  return [...store.history.values()]
+    .filter((h) => h.event.type !== "helmet")
+    .sort((a, b) => b.event.id - a.event.id)
+    .slice(0, limit);
 }
 
 // 로봇 한 대가 지금 서버와 연결돼 있는지.
@@ -50,9 +86,9 @@ export function robotOnline(store, name, now = Date.now()) {
 }
 
 // 안전 현황 (README "안전 현황")
-//   화재: 대피 모드이거나 처리 완료 안 된 화재 경보가 있음
+//   화재: 대피 모드이거나 해제 안 된 화재 경보가 있음
 //         교차 확인은 아직 서버에 없어서, 지금은 flame 경보가 오면 바로 화재로 본다
-//   주의: 처리 완료 안 된 통로 차단 · 밟힘 주의 · 과열 경보가 있거나, 끊긴 로봇이 있음
+//   주의: 해제 안 된 통로 차단 · 밟힘 주의 · 과열 경보가 있거나, 끊긴 로봇이 있음
 //   안전: 그 밖
 // 안전모 미착용(helmet)은 화면에 보여 줄지 미정이라 넣지 않는다.
 // 서버가 끊겨 있으면 지금 상태를 알 수 없으므로 level은 "unknown"
@@ -75,7 +111,7 @@ export function safetySummary(store, now = Date.now()) {
   return { level, mode: store.mode, counts, offline };
 }
 
-// 최근 경보: 처리 완료 안 된 경보, 새것부터.
+// 최근 경보: 해제 안 된 경보, 새것부터.
 // 안전모 미착용은 화면에 보여 줄지 미정이라 뺀다 (safetySummary와 같은 기준)
 export function openAlerts(store, limit = 5) {
   return [...store.events.values()]

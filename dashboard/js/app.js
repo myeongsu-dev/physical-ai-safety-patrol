@@ -1,7 +1,9 @@
 // 기본 화면. 서버·로봇 연결 상태, 현재 모드, 안전 현황, 로봇 현황, 최근 경보를 보여 준다.
 // 지도는 아직 바탕(구역, 통로, 마커, 비상구, 충전 스테이션)만 그린다.
 
-import { createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace } from "./store.js";
+import {
+  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel,
+} from "./store.js";
 import { connect } from "./conn.js";
 import { VIEWBOX, baseMap, legendHtml, robotLayer, MARKER_POS } from "./map.js";
 import { createAlarm } from "./sound.js";
@@ -71,7 +73,7 @@ function render() {
     notice.textContent = `서버와 연결이 끊겼습니다. 다시 연결하는 중 (${ago(s.serverSince, now)}째)`;
     notice.hidden = false;
   } else if (serverOpen && off.length) {
-    notice.textContent = "로봇 연결 끊김: " + off.map((r) => r.name).join(", ");
+    notice.textContent = "로봇 연결 끊김: " + off.map((r) => robotLabel(r.name)).join(", ");
     notice.hidden = false;
   } else {
     notice.hidden = true;
@@ -89,6 +91,7 @@ function renderSafety(serverOpen, now) {
   // 대피 표시는 서버가 끊겨도 내리지 않는다. 마지막으로 받은 모드가 대피면 계속 보여 준다
   const evacuate = safe.mode === "evacuate";
   document.getElementById("evacuate").hidden = !evacuate;
+  if (admin) renderEvacActions(evacuate);
   const modeEl = document.getElementById("mode");
   modeEl.textContent = serverOpen || evacuate ? MODE_TEXT[safe.mode] ?? safe.mode : "-";
   modeEl.className = evacuate ? "evacuate-text" : "";
@@ -133,7 +136,7 @@ function renderRobots(s, serverOpen, now) {
       }
 
       return `<li class="${cls}">
-        <div class="top"><span class="dot"></span><span class="name">${esc(r.name)}</span>
+        <div class="top"><span class="dot"></span><span class="name">${esc(robotLabel(r.name))}</span>
           <span class="state">${esc(state)}</span></div>
         <div class="place">${esc(robotPlace(msg))}</div>
         <div class="meta">${meta.join(" · ")}</div>
@@ -146,16 +149,16 @@ function renderRobots(s, serverOpen, now) {
 function renderRobotLayer(s) {
   const list = s.robots
     .filter((r) => store.robots[r.name]?.marker != null)
-    .map((r) => ({ name: r.name, marker: store.robots[r.name].marker, online: s.server === "open" && r.online }));
+    .map((r) => ({ name: robotLabel(r.name), marker: store.robots[r.name].marker, online: s.server === "open" && r.online }));
   document.getElementById("map").querySelector(".robots").innerHTML = robotLayer(list);
 }
 
 // ---------- 최근 경보와 경보 상세 ----------
-// 관리자 화면에서는 최근 경보를 눌러 오른쪽 경보 상세 칸에서 보고 처리 완료한다.
+// 관리자 화면에서는 최근 경보를 눌러 오른쪽 경보 상세 칸에서 보고 경보 해제한다.
 // 고른 경보가 없으면 가장 새 경보를 보여 준다.
 const detail = {
   selected: null, // 고른 경보 id
-  pending: null, // 처리 완료를 보내는 중인 id
+  pending: null, // 경보 해제를 보내는 중인 id
   confirming: null, // 화재: 한 번 더 확인을 기다리는 id
   error: null, // { id, text }
 };
@@ -163,7 +166,12 @@ let alertsKey = "";
 let detailKey = "";
 
 function shownAlert(list) {
-  return list.find((e) => e.id === detail.selected) ?? list[0] ?? null;
+  const open = list.find((e) => e.id === detail.selected);
+  if (open) return open;
+  // 경보 이력에서 고른 해제된 경보
+  const past = store.history.get(detail.selected);
+  if (past) return past.event;
+  return list[0] ?? null;
 }
 
 function renderAlerts() {
@@ -175,21 +183,110 @@ function renderAlerts() {
     alertsKey = key;
     document.getElementById("alerts").innerHTML = list.length
       ? list.map((e) => alertItem(e, shown && e.id === shown.id)).join("")
-      : `<li class="empty">처리할 경보가 없습니다</li>`;
+      : `<li class="empty">남은 경보가 없습니다</li>`;
   }
   if (admin) {
     renderDetail(shown);
     renderPopup();
+    renderHistory(shown);
+  }
+}
+
+// ---------- 경보 이력 (관리자 화면) ----------
+let historyKey = "";
+
+function renderHistory(shown) {
+  const list = alertHistory(store);
+  const key = list.map((h) => `${h.event.id}${h.checkedAt ? "c" : ""}`).join(",") + "|" + (shown?.id ?? "");
+  if (key === historyKey) return;
+  historyKey = key;
+  document.getElementById("history").innerHTML = list.length
+    ? list.map((h) => historyRow(h, shown && h.event.id === shown.id)).join("")
+    : `<tr><td colspan="7" class="empty">아직 받은 경보가 없습니다</td></tr>`;
+}
+
+function historyRow(h, selected) {
+  const e = h.event;
+  const [label, cls] = ALERT_TEXT[e.type] ?? [e.type, ""];
+  const state = h.checkedAt ? `경보 해제 ${clock(h.checkedAt)}` : "해제 전";
+  return `<tr class="${selected ? "selected" : ""}">
+    <td><button type="button" class="row-btn" data-alert="${e.id}" aria-pressed="${selected}">${e.ts ? clock(e.ts * 1000) : "-"}</button></td>
+    <td class="type ${cls}">${esc(label)}</td>
+    <td>${esc(robotLabel(e.robot))}</td>
+    <td>${h.role ? `${esc(h.role)} 경로` : "-"}</td>
+    <td>${e.marker != null ? `마커 ${esc(e.marker)}` : "-"}</td>
+    <td class="${h.checkedAt ? "done" : "open"}">${state}</td>
+    <td>${e.photo
+      ? `<a class="photo-btn" href="${esc(e.photo)}" target="_blank" rel="noopener">사진 보기</a>`
+      : `<span class="no-photo">사진 없음</span>`}</td>
+  </tr>`;
+}
+
+// ---------- 대피 해제 (관리자 화면) ----------
+const evac = { confirming: false, pending: false, error: null };
+let evacKey = "";
+
+function renderEvacActions(evacuate) {
+  const key = JSON.stringify([evacuate, evac]);
+  if (key === evacKey) return;
+  evacKey = key;
+  const el = document.getElementById("evacuate-actions");
+  if (!evacuate) {
+    el.innerHTML = "";
+    evac.confirming = false;
+    evac.error = null;
+    return;
+  }
+  let html;
+  if (evac.pending) {
+    html = `<button type="button" class="evac-btn" disabled>보내는 중</button>`;
+  } else if (evac.confirming) {
+    // 누르기 전에 화면 안에서 한 번 더 확인한다
+    html = `<span class="evac-confirm">현장 안전을 확인했나요? 대피를 해제하면 평상시로 돌아갑니다.</span>
+      <button type="button" class="evac-btn sure" data-evac="1" data-sure="1">대피 해제</button>
+      <button type="button" class="evac-btn" data-evac-cancel="1">취소</button>`;
+  } else {
+    html = `<button type="button" class="evac-btn" data-evac="1">대피 해제</button>`;
+  }
+  if (evac.error) html += `<span class="evac-error">${esc(evac.error)}</span>`;
+  el.innerHTML = html;
+}
+
+async function releaseEvac(sure) {
+  if (evac.pending) return;
+  if (!sure) {
+    evac.confirming = true;
+    render();
+    return;
+  }
+  evac.confirming = false;
+  evac.pending = true;
+  evac.error = null;
+  render();
+  try {
+    const res = await conn.request("/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "normal" }),
+    });
+    if (!res.ok) throw new Error(`서버 응답 ${res.status}`);
+    // 서버가 WebSocket으로도 mode를 다시 보내지만, 받은 답으로 바로 반영한다
+    apply(store, { kind: "mode", mode: (await res.json()).mode });
+  } catch (err) {
+    evac.error = `대피 해제를 보내지 못했습니다 (${err.message})`;
+  } finally {
+    evac.pending = false;
+    render();
   }
 }
 
 function alertItem(e, selected) {
   const [label, cls] = ALERT_TEXT[e.type] ?? [e.type, ""];
-  const where = [e.marker != null ? `마커 ${esc(e.marker)}` : "", `로봇 ${esc(e.robot)}`].filter(Boolean).join(" · ");
+  const where = [e.marker != null ? `마커 ${esc(e.marker)}` : "", esc(robotLabel(e.robot))].filter(Boolean).join(" · ");
   const body = `<span class="type ${cls}">${esc(label)}</span>
     <span class="at">${e.ts ? clock(e.ts * 1000) : ""}</span>
     <span class="where">${where}</span>`;
-  // 기본 화면에서는 누를 수 없다 (처리 완료는 관리자 화면에서만)
+  // 기본 화면에서는 누를 수 없다 (경보 해제는 관리자 화면에서만)
   if (!admin) return `<li>${body}</li>`;
   const liCls = [selected ? "selected" : "", alertState.blink.has(e.id) ? "blink" : ""].join(" ").trim();
   return `<li class="${liCls}"><button type="button" class="alert-btn" data-alert="${e.id}"
@@ -197,12 +294,12 @@ function alertItem(e, selected) {
 }
 
 function renderDetail(e) {
-  const key = JSON.stringify([e?.id, detail.pending, detail.confirming, detail.error]);
+  const key = JSON.stringify([e?.id, e?.checked, detail.pending, detail.confirming, detail.error]);
   if (key === detailKey) return;
   detailKey = key;
   const el = document.getElementById("detail");
   if (!e) {
-    el.innerHTML = `<p class="empty">처리할 경보가 없습니다</p>`;
+    el.innerHTML = `<p class="empty">남은 경보가 없습니다</p>`;
     return;
   }
   const [label, cls] = ALERT_TEXT[e.type] ?? [e.type, ""];
@@ -212,10 +309,15 @@ function renderDetail(e) {
         <img src="${esc(e.photo)}" alt="${esc(label)} 경보 사진"></a>`
     : `<div class="photo none">사진 없음</div>`;
 
-  const action = actionHtml(e);
-  const err = errorHtml(e);
+  // 경보 이력에서 고른 해제된 경보는 버튼 없이 해제 시각만
+  const past = store.history.get(e.id);
+  const action = e.checked
+    ? `<p class="done-text">경보 해제 ${past?.checkedAt ? clock(past.checkedAt) : ""}</p>`
+    : actionHtml(e);
+  const err = e.checked ? "" : errorHtml(e);
 
-  const rows = [["시각", e.ts ? `${dateText(e.ts * 1000)} ${clock(e.ts * 1000)}` : "-"], ["로봇", e.robot]];
+  const rows = [["시각", e.ts ? `${dateText(e.ts * 1000)} ${clock(e.ts * 1000)}` : "-"], ["로봇", robotLabel(e.robot)]];
+  if (past?.role) rows.push(["경로", `${past.role} 경로`]);
   rows.push(["위치", e.marker != null ? `마커 ${e.marker}` : "-"]);
   // 과열은 온도로 판단하는 경보라 로봇이 신뢰도를 0으로 보낸다. 0%로 보이면 오해하니 뺀다
   if (e.conf != null && e.type !== "heat") rows.push(["신뢰도", `${Math.round(e.conf * 100)}%`]);
@@ -230,18 +332,18 @@ function renderDetail(e) {
     <dl class="fields">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`;
 }
 
-// 처리 완료 버튼 (경보 상세 칸과 팝업이 같이 쓴다)
+// 경보 해제 버튼 (경보 상세 칸과 팝업이 같이 쓴다)
 function actionHtml(e) {
   if (detail.pending === e.id) {
     return `<button type="button" class="check" disabled>보내는 중</button>`;
   }
   if (detail.confirming === e.id) {
-    // 화재는 처리 완료 전에 화면 안에서 한 번 더 확인한다. 대피 해제는 따로 한다
-    return `<p class="confirm-text">화재 경보를 처리 완료할까요? 대피 모드는 따로 해제해야 합니다.</p>
-      <div class="actions"><button type="button" class="check danger" data-check="${e.id}" data-sure="1">처리 완료</button>
+    // 화재는 경보 해제 전에 화면 안에서 한 번 더 확인한다. 대피 해제는 따로 한다
+    return `<p class="confirm-text">화재 경보를 해제할까요? 대피 모드는 따로 해제해야 합니다.</p>
+      <div class="actions"><button type="button" class="check danger" data-check="${e.id}" data-sure="1">경보 해제</button>
       <button type="button" class="cancel" data-cancel="1">취소</button></div>`;
   }
-  return `<button type="button" class="check" data-check="${e.id}">처리 완료</button>`;
+  return `<button type="button" class="check" data-check="${e.id}">경보 해제</button>`;
 }
 
 function errorHtml(e) {
@@ -272,7 +374,7 @@ function noticeEvent(msg, now = Date.now()) {
 }
 
 function currentPopup() {
-  // 처리 완료됐거나 사라진 경보는 건너뛴다
+  // 해제됐거나 사라진 경보는 건너뛴다
   while (alertState.queue.length && !store.events.has(alertState.queue[0])) alertState.queue.shift();
   return alertState.queue.length ? store.events.get(alertState.queue[0]) : null;
 }
@@ -299,7 +401,7 @@ function renderPopup() {
   const mark = pos
     ? `<circle cx="${pos[0]}" cy="${pos[1]}" r="70" fill="none" stroke="#ff4d4d" stroke-width="12"/>`
     : "";
-  const where = [e.marker != null ? `마커 ${esc(e.marker)}` : "", `로봇 ${esc(e.robot)}`].filter(Boolean).join(" · ");
+  const where = [e.marker != null ? `마커 ${esc(e.marker)}` : "", esc(robotLabel(e.robot))].filter(Boolean).join(" · ");
 
   wrap.innerHTML = `<div class="popup ${cls}" role="alertdialog" aria-modal="true" aria-labelledby="popup-title">
     <div class="popup-head">
@@ -376,7 +478,7 @@ async function checkAlert(id, sure) {
     apply(store, await res.json());
     if (detail.selected === id) detail.selected = null;
   } catch (err) {
-    detail.error = { id, text: `처리 완료를 보내지 못했습니다 (${err.message})` };
+    detail.error = { id, text: `경보 해제를 보내지 못했습니다 (${err.message})` };
   } finally {
     detail.pending = null;
     render();
@@ -384,7 +486,9 @@ async function checkAlert(id, sure) {
 }
 
 function onClick(ev) {
-  const t = ev.target.closest?.("[data-alert], [data-check], [data-cancel], [data-popup-close], [data-sound]");
+  const t = ev.target.closest?.(
+    "[data-alert], [data-check], [data-cancel], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel]",
+  );
   if (!t) return;
   if (t.dataset.alert) {
     detail.selected = Number(t.dataset.alert);
@@ -393,6 +497,11 @@ function onClick(ev) {
     render();
   } else if (t.dataset.popupClose) {
     closePopup();
+  } else if (t.dataset.evac) {
+    releaseEvac(t.dataset.sure === "1");
+  } else if (t.dataset.evacCancel) {
+    evac.confirming = false;
+    render();
   } else if (t.dataset.sound) {
     if (alarm.enabled) {
       alarm.disable();
@@ -459,6 +568,7 @@ if (admin) {
   document.title = "안전 순찰 관제 (관리자)";
   document.getElementById("view-name").hidden = false;
   document.getElementById("detail-panel").hidden = false;
+  document.getElementById("history-panel").hidden = false;
   document.getElementById("sound").hidden = false;
   renderSoundButton();
   document.addEventListener("click", onClick);
