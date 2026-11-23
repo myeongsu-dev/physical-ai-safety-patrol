@@ -7,6 +7,7 @@
 """
 import logging
 import queue
+import sys
 import threading
 import time
 
@@ -101,8 +102,9 @@ class DogLink:
         try:
             s = serial.Serial()
             s.port, s.baudrate, s.timeout = self.port, self.baud, 0.2
-            s.dtr = False  # 열기 전에 꺼 둬야 보드가 리셋되지 않음
-            s.rts = False
+            # 보드가 리셋되지 않게: Windows는 열기 전에 DTR·RTS를 끄고, Linux는 커널이 켠 그대로 둔다(하나씩 끄면 리셋)
+            if sys.platform == "win32":
+                s.dtr = s.rts = False
             s.open()
             self.ser = s
             log.info("보드 연결 %s @%d", self.port, self.baud)

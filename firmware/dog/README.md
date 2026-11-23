@@ -25,7 +25,7 @@ MechDog 제어 보드(ESP32 · MicroPython)에 올리는 프로그램입니다. 
   mpremote connect <포트> resume reset
   ```
   `resume`을 빼면 소프트 리셋에서 보드가 죽었다가 다시 켜집니다. `could not enter raw repl`이 나면 부팅이 끝난 뒤 한 번 더 합니다.
-- Pi(`edge/dog_link.py`)와 `upload.py`는 DTR·RTS를 끈 채 열어서 포트를 열어도 보드가 재시작되지 않습니다 (Windows에서 확인, Linux는 확인 필요).
+- Pi(`edge/dog_link.py`)와 `upload.py`는 포트를 열어도 보드가 재시작되지 않게 엽니다. Windows는 열기 전에 DTR·RTS를 끄고, Linux는 커널이 켠 그대로 둡니다(열고 나서 하나씩 끄면 그 사이에 리셋됨). 둘 다 실기에서 확인했습니다.
 
 ## 검은 선 읽기 (비전 모듈 펌웨어)
 

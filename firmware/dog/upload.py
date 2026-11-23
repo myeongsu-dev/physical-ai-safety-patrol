@@ -2,8 +2,8 @@
 
   python firmware/dog/upload.py <포트>      포트는 .env의 DOG_PORT, 모르면 python -m edge.hwcheck ports
 
-보드가 재시작되면 서보 힘이 빠져 로봇이 주저앉는다. mpremote는 포트를 열 때 DTR·RTS를 켜서(CH340 보드는 재시작)
-올린 뒤 reset도 하므로 쓰지 않는다. 여기서는 DTR·RTS를 끈 채 열고, Ctrl-C로 main을 멈춘 뒤(로봇은 선 채 정지)
+보드가 재시작되면 서보 힘이 빠져 로봇이 주저앉는다. mpremote는 포트를 열 때 DTR·RTS를 바꿔서(CH340 보드는 재시작)
+올린 뒤 reset도 하므로 쓰지 않는다. 여기서는 재시작되지 않게 열고, Ctrl-C로 main을 멈춘 뒤(로봇은 선 채 정지)
 raw REPL로 파일을 쓰고 바로 다시 실행한다. 이전 파일은 보드에 main_prev.py로 남는다.
 """
 import sys
@@ -39,7 +39,8 @@ def main(port):
     data = SRC.read_bytes()
     s = serial.Serial()
     s.port, s.baudrate, s.timeout = port, 115200, 0.1
-    s.dtr = s.rts = False  # 열기 전에 꺼 둬야 보드가 재시작되지 않음
+    if sys.platform == "win32":  # Windows는 열기 전에 꺼 둬야, Linux는 커널이 켠 그대로 둬야 재시작되지 않음
+        s.dtr = s.rts = False
     s.open()
     try:
         s.write(b"\r\x03\x03")  # main 멈춤 (main.py의 finally가 로봇을 세움)

@@ -31,7 +31,7 @@ def _int(v):
 
 # ---------- 로봇 · 장치 ----------
 ROBOT_ID = _get("ROBOT_ID", "A")
-DOG_PORT = _get("DOG_PORT", "/dev/ttyACM0")     # MechDog 보드 USB 시리얼
+DOG_PORT = _get("DOG_PORT", "/dev/ttyUSB0")     # MechDog 보드 USB 시리얼 (CH340). 포트는 기기마다 달라 .env에서 바꿈
 DOG_BAUD = _get("DOG_BAUD", 115200, _int)       # 확인 필요: 보드 main.py와 맞출 것
 CAM_PORT = _get("CAM_PORT", "/dev/ttyACM1")     # XIAO: 시리얼 경로면 JPEG 스트림, 숫자·/dev/video*면 UVC
 CAM_BAUD = _get("CAM_BAUD", 2000000, _int)      # USB CDC라 실제 속도와는 무관
