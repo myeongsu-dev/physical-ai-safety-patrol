@@ -30,7 +30,7 @@ cam = optional(lambda: Hiwonder_IIC.ESP32S3Cam(Hiwonder_IIC.IIC(2)))
 tube = optional(Hiwonder.Digitaltube)
 # shortcut: MP3 클래스 이름·주소(포트 2, 0x7B)는 실기 확인 전 추정. 없으면 A 명령이 "MP3 없음"으로 답한다
 mp3 = optional(lambda: Hiwonder_IIC.MP3(Hiwonder_IIC.IIC(2)))
-# 미션맵 선은 검은 테이프. 비전 모듈 공장 펌웨어에는 검정 기준값이 없어 5번 칸에 넣고 다시 구워야 한다 (README)
+# 미션맵 선은 검은 테이프. 비전 모듈에 firmware/vision/patrol_cam을 구워야 검정을 찾는다 (README)
 line_color = getattr(cam, "BLACK", 0) if cam else 0
 
 # 지금 하고 있는 일: until(이동 끝 시각), mode(None/move/follow/guard), 스트림 주기·채널, rx(Pi에게서 마지막으로 받은 시각)
@@ -60,8 +60,12 @@ def ch_sonar():
 
 
 def ch_line():
+    """선 중심 x (0~159, 가운데 80), 못 찾으면 -1. line_follow는 화면 위 구역·가운데 구역의 7바이트
+    [ID, 중심x, 중심y, 좌상x, 좌상y, 우하x, 우하y] 두 개를 이어서 줌 → 로봇에 가까운 가운데 구역을 먼저 씀"""
     c = cam.line_follow(line_color)
-    return -1 if (c[0] == 0 and c[1] == 0) else c[0]
+    if c[7]:
+        return c[8]
+    return c[1] if c[0] else -1
 
 
 def ev_color():

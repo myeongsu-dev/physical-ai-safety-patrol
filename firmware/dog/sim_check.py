@@ -36,7 +36,8 @@ class Cam:
     YELLOW = 4
     BLACK = 5
     def __init__(self, *a): pass
-    def line_follow(self, c): return [80, 70]
+    line = [bytes(7), bytes([5, 80, 60, 70, 50, 90, 70])]  # 위 구역·가운데 구역 (Hiwonder 레지스터 0xA8·0xA9)
+    def line_follow(self, c): return Cam.line[0] + Cam.line[1]
     def color_recognition(self): return [1]
 
 
@@ -122,6 +123,11 @@ cmd("S")
 # 선 따라가기: 선 x=80(가운데)이면 직진
 cmd("F", 50, 25, 2000); dt.tick_motion(); assert moves[-1] == (50, 0)
 cmd("S")
+# 선 위치: 가운데 구역 먼저, 없으면 위 구역, 둘 다 없으면 -1
+assert dt.ch_line() == 80
+Cam.line = [bytes([5, 30, 20, 20, 10, 40, 30]), bytes(7)]; assert dt.ch_line() == 30
+Cam.line = [bytes(7), bytes(7)]; assert dt.ch_line() == -1
+Cam.line = [bytes(7), bytes([5, 80, 60, 70, 50, 90, 70])]
 # LED: 숫자·글자는 됨, 모르는 모드는 오류로 답함
 assert cmd("L", "num", 88) == "CMD|L|ok|$" and "tube 88" in sent
 assert cmd("L", "text", "Hi") == "CMD|L|ok|$" and sent[:2] == ["tube clear", "tube Hi"]
