@@ -1,6 +1,9 @@
-"""비전 모듈(ESP32-S3)에 Hiwonder 펌웨어(.bin)를 굽는다 (PC·Pi 같음).
+"""비전 모듈(ESP32-S3)에 펌웨어를 굽는다 (PC·Pi 같음, 빌드 도구 없이).
 
-  python firmware/vision/flash.py <펌웨어.bin> [포트]     포트를 안 주면 .env의 VISION_PORT
+  python firmware/vision/flash.py [포트]                    저장소의 patrol_cam.bin을 구움
+  python firmware/vision/flash.py [포트] --bin 파일.bin     다른 펌웨어 (Hiwonder 공장 펌웨어 등)
+
+포트를 안 주면 .env의 VISION_PORT.
 
 비전 모듈 USB-C를 PC나 Pi에 직접 꽂고 굽는다 (MechDog 보드를 거쳐서는 못 구움, 둘 사이는 I2C 숫자 통로).
 설정은 Hiwonder 안내와 같다: ESP32-S3, 주소 0x0, 460800, 80MHz, DIO.
@@ -14,13 +17,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def main(args):
-    if not 1 <= len(args) <= 2 or args[0] in ("-h", "--help"):
-        sys.exit(__doc__)
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("port", nargs="?")
+    ap.add_argument("--bin", default=str(Path(__file__).with_name("patrol_cam.bin")))
+    a = ap.parse_args(args)
     sys.path.insert(0, str(ROOT))
     from edge import config  # .env를 읽음
 
-    bin_path = Path(args[0])
-    port = args[1] if len(args) == 2 else config._get("VISION_PORT", None)
+    bin_path = Path(a.bin)
+    port = a.port or config._get("VISION_PORT", None)
     if not bin_path.is_file():
         sys.exit("펌웨어 파일이 없습니다: %s" % bin_path)
     if not port:

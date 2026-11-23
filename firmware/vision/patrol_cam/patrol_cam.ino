@@ -39,7 +39,10 @@ static portMUX_TYPE regLock = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint8_t reqReg = 0;
 
 static Preferences prefs;
-static volatile uint8_t thr = 60;
+// shortcut: 임시값. 집 바닥·조명에서 잰 값(자동 노출이라 검은 테이프 약 120, 흰 바닥 약 250, 2026-11-24).
+//           미션맵 바닥·테이프·조명에서 다시 재서 고쳐야 함 (view.py --thr로 맞춘 뒤 여기 반영하고 build.py)
+#define THR_DEFAULT 160
+static volatile uint8_t thr = THR_DEFAULT;
 static volatile bool streaming = false;
 static uint16_t *shot = NULL;  // 영상용 복사본 (PSRAM)
 static SemaphoreHandle_t shotReady, shotFree;
@@ -175,7 +178,7 @@ void setup() {
   Serial.setTxBufferSize(16384);
   Serial.begin(BAUD);
   prefs.begin("patrolcam", false);
-  thr = prefs.getUChar("thr", 60);
+  thr = prefs.getUChar("thr", THR_DEFAULT);
   bool cam = startCamera();
   shot = (uint16_t *)ps_malloc(W * H * 2);
   shotReady = xSemaphoreCreateBinary();

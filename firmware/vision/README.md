@@ -17,7 +17,8 @@ python firmware/vision/view.py [포트] [--thr N]
 
 - 브라우저에서 `http://<모듈이 꽂힌 기기 주소>:8090`을 엽니다. 초록 상자가 찾은 선, 회색 줄이 구역 경계입니다.
 - 켜는 동안만 영상을 보내고 Ctrl-C로 끄면 멈춥니다. 선 찾기는 영상과 상관없이 계속 돕니다.
-- `--thr N`: 검정 기준 밝기(1~254, 처음 60). 바닥까지 검정으로 잡히면 낮추고, 테이프를 놓치면 올립니다. 모듈에 저장됩니다.
+- `--thr N`: 검정 기준 밝기(1~254, 처음 160). 바닥까지 검정으로 잡히면 낮추고, 테이프를 놓치면 올립니다. 모듈에 저장됩니다.
+  - 처음 값 160은 집 바닥에서 임시로 잰 값입니다. 미션맵 바닥·테이프·조명에서 다시 재서 `patrol_cam.ino`의 `THR_DEFAULT`를 고쳐야 합니다.
 - 포트를 안 주면 `.env`의 `VISION_PORT`를 씁니다. 포트는 기기마다 다르니 `python -m edge.hwcheck ports`로 찾습니다. 비전 모듈과 MechDog 보드는 같은 CH340 칩이라 Pi에서는 꽂은 USB 자리로 정해지는 `/dev/serial/by-path/...` 이름이 안 헷갈립니다.
 
 ## MechDog 보드가 읽는 값
@@ -28,13 +29,24 @@ Hiwonder 비전 모듈과 같은 I2C 형식(주소 `0x53`)이라 보드 라이�
 - 각 7바이트 `[ID 5, 중심x, 중심y, 좌상x, 좌상y, 우하x, 우하y]`, 좌표는 160x120 기준(가운데 x=80). 못 찾으면 모두 0.
 - 다른 레지스터(빨강·노랑 등 색, 얼굴)는 0입니다.
 
-## 빌드·굽기
+## 굽기
 
 ```
-arduino-cli compile -b esp32:esp32:esp32s3:PSRAM=opi,FlashSize=8M,PartitionScheme=default_8MB --output-dir build firmware/vision/patrol_cam
-python firmware/vision/flash.py build/patrol_cam.ino.merged.bin [포트]
+pip install esptool
+python firmware/vision/flash.py [포트]
 ```
 
-- `arduino-cli`와 ESP32 보드 패키지(`esp32:esp32` 3.x)가 필요합니다. `flash.py`는 `pip install esptool`.
-- `flash.py`는 주소 `0x0`, 460800, 80MHz, DIO로 굽습니다(Hiwonder 안내와 같음). `DOG_PORT`와 같은 포트를 주면 굽지 않고 멈춥니다.
-- Hiwonder 공장 펌웨어(.bin)로 되돌릴 때도 `flash.py`로 굽습니다. 공장 펌웨어 파일은 Hiwonder MechDog 자료의 비전 모듈 펌웨어 폴더에 있습니다.
+- 저장소에 빌드해 둔 `patrol_cam.bin`을 굽습니다. 빌드 도구가 없어도 됩니다.
+- 포트를 안 주면 `.env`의 `VISION_PORT`. `DOG_PORT`와 같은 포트를 주면 굽지 않고 멈춥니다(MechDog 보드가 재시작되어 로봇이 주저앉음).
+- 주소 `0x0`, 460800, 80MHz, DIO로 굽습니다(Hiwonder 안내와 같음). 구우면 저장해 둔 기준 밝기도 처음 값으로 돌아갑니다.
+- Hiwonder 공장 펌웨어로 되돌릴 때: `--bin <Hiwonder 펌웨어.bin>`. 파일은 Hiwonder가 제공하는 MechDog 자료의 비전 모듈 펌웨어 폴더에 있습니다.
+
+## 고친 뒤 빌드
+
+`patrol_cam.ino`를 고친 사람만 합니다. `arduino-cli`와 ESP32 보드 패키지(`arduino-cli core install esp32:esp32`, 3.x)가 필요합니다.
+
+```
+python firmware/vision/build.py
+```
+
+`firmware/vision/patrol_cam.bin`이 새로 만들어집니다. 소스와 함께 커밋해서 팀원은 빌드 없이 굽게 합니다.

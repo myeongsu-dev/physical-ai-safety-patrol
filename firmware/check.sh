@@ -7,3 +7,5 @@ cd "$(dirname "$0")/.."
 
 python -m compileall -q firmware
 python firmware/dog/sim_check.py
+python -c "import sys; sys.path.insert(0, 'firmware/vision'); import build; assert build.trim(b'\x01' + b'\xff' * 5000) == b'\x01' + b'\xff' * 4095"
+test -s firmware/vision/patrol_cam.bin  # 팀원이 빌드 없이 굽는 펌웨어
