@@ -12,6 +12,9 @@ ml/*/runs/
 *.pt
 !models/**/*.pt
 
+# 펌웨어 빌드 결과 (firmware/vision README의 arduino-cli --output-dir)
+build/
+
 # 실행 중 생기는 것 (서버 사진·기록)
 server/photos/
 *.sqlite3
