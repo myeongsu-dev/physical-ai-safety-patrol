@@ -14,7 +14,9 @@ MechDog 제어 보드(ESP32 · MicroPython)에 올리는 프로그램입니다. 
 - 프로그램: `main.py`. 시험 도구의 `mechdog_test.py`(BLE)와 명령 처리가 같고, USB 시리얼(REPL과 같은 UART, 115200)로 받습니다. `A`(음성), `L|arrow|left·right·up·x`(LED에 `<` `>` `^` `X` 글자), 2초 감시(멈추고 LED에 `E`)가 더해졌습니다.
 - 셀프 체크: `python firmware/dog/sim_check.py` (가짜 Hiwonder 모듈로 PC에서, CI도 돌림)
 - `main()`은 스레드가 아니라 파일 맨 끝에서 직접 돕니다. 파일이 끝나면 REPL이 켜져 Pi 명령을 가로채기 때문입니다.
-- 올리기 (PC·Pi 같음): `python firmware/dog/upload.py <포트>`. `<포트>`는 `.env`의 `DOG_PORT`와 같은 값이고, 모르면 `python -m edge.hwcheck ports`로 찾습니다.
+- 올리기 (PC·Pi 같음): `python firmware/dog/upload.py [포트]`. 포트를 안 주면 `.env`의 `DOG_PORT`를 쓰고, 모르면 `python -m edge.hwcheck ports`로 찾습니다.
+  - `edge.agent`가 포트를 쓰고 있으면 올리지 않고 멈춥니다. 에이전트를 멈추고 다시 합니다.
+  - 다 올린 뒤 `main.py`가 `V`에 답하는 것까지 확인합니다.
   - 보드를 재시작하지 않고 `main.py`를 바꿔 그 자리에서 다시 실행합니다. 이전 파일은 보드에 `main_prev.py`로 남습니다.
   - 보드가 재시작되면 서보 힘이 빠져 로봇이 주저앉습니다(배 쪽 배터리에 충격). `mpremote`는 포트를 열 때 CH340 보드를 재시작시키고 올린 뒤 `reset`도 하므로 쓰지 않습니다.
 - 처음 올릴 때(공장 앱이나 시험 도구가 돌고 있을 때)만 `mpremote`를 씁니다. 그 프로그램들은 시리얼을 스레드에서 읽어서 `upload.py`의 Ctrl-C로 멈추지 않습니다. 로봇을 눕힌 채 합니다:

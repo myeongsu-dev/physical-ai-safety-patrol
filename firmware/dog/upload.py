@@ -1,16 +1,15 @@
 """MechDog 보드에 main.py를 재시작 없이 올리고 그 자리에서 다시 실행한다 (PC·Pi 같음).
 
-  python firmware/dog/upload.py <포트>      포트는 .env의 DOG_PORT, 모르면 python -m edge.hwcheck ports
+  python firmware/dog/upload.py [포트]             포트를 안 주면 .env의 DOG_PORT (모르면 python -m edge.hwcheck ports)
 
 보드가 재시작되면 서보 힘이 빠져 로봇이 주저앉는다. mpremote는 포트를 열 때 DTR·RTS를 바꿔서(CH340 보드는 재시작)
 올린 뒤 reset도 하므로 쓰지 않는다. 여기서는 재시작되지 않게 열고, Ctrl-C로 main을 멈춘 뒤(로봇은 선 채 정지)
 raw REPL로 파일을 쓰고 바로 다시 실행한다. 이전 파일은 보드에 main_prev.py로 남는다.
 """
+import subprocess
 import sys
 import time
 from pathlib import Path
-
-import serial
 
 SRC = Path(__file__).with_name("main.py")
 CHUNK = 256  # raw REPL 한 번에 보내는 바이트
@@ -35,7 +34,19 @@ def run(s, code):
     return out.decode(errors="replace").strip()
 
 
+def busy(port):
+    """Linux: 다른 프로그램(edge.agent 등)이 포트를 잡고 있으면 True. fuser가 없으면 확인 안 함"""
+    try:
+        return subprocess.run(["fuser", port], capture_output=True).returncode == 0
+    except OSError:
+        return False
+
+
 def main(port):
+    import serial
+
+    if sys.platform != "win32" and busy(port):  # 같이 열면 두 프로그램이 보드 답을 나눠 읽음
+        sys.exit("%s를 다른 프로그램이 쓰는 중입니다. edge.agent 등을 멈추고 다시 하세요" % port)
     data = SRC.read_bytes()
     s = serial.Serial()
     s.port, s.baudrate, s.timeout = port, 115200, 0.1
@@ -61,12 +72,27 @@ def main(port):
                "try:\n os.rename('main.py','main_prev.py')\nexcept OSError:\n pass\nos.rename('main_new.py','main.py')")
         s.write(b"exec(open('main.py').read())\x04")  # 재시작 없이 다시 실행. 끝을 기다리지 않음
         read_until(s, b"OK")
-        print("올림: main.py %d바이트, 다시 실행함" % size)
+        # main이 명령에 답할 때까지 확인 (Pi에서 올린 뒤 main이 답하지 않은 적이 한 번 있음)
+        buf, limit = b"", time.time() + 10
+        while b"CMD|V|" not in buf and time.time() < limit:
+            s.write(b"CMD|V|$\n")
+            time.sleep(0.5)
+            buf += s.read(s.in_waiting)
+        if b"CMD|V|" not in buf:
+            raise RuntimeError("main.py는 올렸지만 V에 답하지 않음: %r" % buf[-200:])
+        print("올림: main.py %d바이트, 다시 실행해 V 응답 확인" % size)
     finally:
         s.close()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    args = sys.argv[1:]
+    if len(args) > 1 or args[:1] in (["-h"], ["--help"]):
         sys.exit(__doc__)
-    main(sys.argv[1])
+    if args:
+        main(args[0])
+    else:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+        from edge import config
+
+        main(config.DOG_PORT)
