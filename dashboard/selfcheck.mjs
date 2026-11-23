@@ -137,6 +137,24 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
   apply(st, { kind: "state", robot: "B", online: true }, T + 7000);
   assert.ok(robotOnline(st, "B", T + 7000));
 
+  // 서버가 끊김을 알려 줌 (server/link-status): online:false + seen_ago
+  // 보고 있던 중이면 마지막 수신 시각이 남고, seen_ago가 있으면 그걸로 맞춘다
+  apply(st, { kind: "state", robot: "B", online: false, seen_ago: 5.5 }, T + 12500);
+  assert.ok(!robotOnline(st, "B", T + 12500));
+  assert.equal(connectionSummary(st, T + 12500).robots.find((r) => r.name === "B").lastSeen, T + 7000);
+  // seen_ago 없이 online:false만 오면, 이 화면이 마지막으로 받은 시각을 그대로 둔다
+  apply(st, { kind: "state", robot: "A", online: true }, T + 20000);
+  apply(st, { kind: "state", robot: "A", online: false }, T + 26000);
+  assert.ok(!robotOnline(st, "A", T + 26000));
+  assert.equal(connectionSummary(st, T + 26000).robots.find((r) => r.name === "A").lastSeen, T + 20000);
+  // 화면을 새로 열었는데 seen_ago가 있으면 마지막 수신 시각을 알 수 있다
+  const st3 = createStore();
+  apply(st3, { kind: "state", robot: "C", online: false, seen_ago: 30 }, T);
+  assert.equal(connectionSummary(st3, T).robots.find((r) => r.name === "C").lastSeen, T - 30000);
+  // state가 다시 오면 연결
+  apply(st, { kind: "state", robot: "B", online: true }, T + 27000);
+  assert.ok(robotOnline(st, "B", T + 27000));
+
   // 4대 말고 다른 이름이 오면 함께 센다
   apply(st, { kind: "state", robot: "E", online: true }, T + 7000);
   assert.equal(connectionSummary(st, T + 7000).total, 5);
@@ -500,7 +518,13 @@ class FakeAudioContext {
   fake.robots.B.eventFields = (t) => ({ ...orig(t), photo: "/photos/B_1123_120000.jpg" });
   fake.emit("obstacle", "B");
   await tickWait();
-  assert.match(el("history").innerHTML, /<a class="photo-btn" href="\/photos\/B_1123_120000.jpg" target="_blank"/);
+  assert.match(el("history").innerHTML, /<a class="photo-btn" href="\/photos\/B_1123_120000.jpg" data-photo="\/photos\/B_1123_120000.jpg"/);
+  // 사진 보기: 다른 페이지가 아니라 대시보드 위에 띄우고 닫기로 닫는다
+  await app.click({ photo: "/photos/B_1123_120000.jpg" });
+  assert.equal(el("viewer").hidden, false);
+  assert.match(el("viewer").innerHTML, /<img src="\/photos\/B_1123_120000.jpg"/);
+  await app.click({ viewerClose: "1" });
+  assert.equal(el("viewer").hidden, true);
 
   // 경보 이력: 해제한 경보도 남고, 눌러 보면 상세에 버튼 없이 해제 시각
   assert.match(el("history").innerHTML, new RegExp(`data-alert="${fire.id}"`));
