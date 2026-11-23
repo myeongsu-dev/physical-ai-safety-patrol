@@ -234,7 +234,11 @@ assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(N
 
 // ---------- 5) 화면 파일이 오류 없이 돌아가는지 ----------
 // 브라우저 대신 아주 작은 가짜 document를 두고 js/app.js를 ?fake로 불러 본다
-{
+const realSetInterval = globalThis.setInterval;
+const tickWait = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+
+// search: 주소 뒤 ?… 부분. 같은 app.js를 두 번 띄우려고 import 주소에 tag를 붙인다
+async function bootApp(search, tag) {
   const els = {};
   const el = (id) =>
     (els[id] ??= {
@@ -243,13 +247,37 @@ assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(N
       setAttribute(k, v) { this[k] = v; },
     });
   const timers = [];
-  globalThis.document = { getElementById: el };
-  globalThis.location = { search: "?fake", protocol: "http:", host: "localhost" };
+  let onClick = null;
+  globalThis.document = {
+    getElementById: el,
+    addEventListener: (type, fn) => { if (type === "click") onClick = fn; },
+  };
+  globalThis.location = { search, protocol: "http:", host: "localhost" };
   globalThis.window = globalThis;
-  const realSetInterval = globalThis.setInterval;
   globalThis.setInterval = (fn, ms) => { const t = realSetInterval(fn, ms); timers.push(t); return t; };
-  await import("./js/app.js");
-  await new Promise((r) => setTimeout(r, 20)); // 가짜 소켓이 열리고 첫 묶음이 오기까지
+  await import(`./js/app.js?${tag}`);
+  await tickWait(20); // 가짜 소켓이 열리고 첫 묶음이 오기까지
+  const fakeServer = globalThis.fake;
+  return {
+    el,
+    fake: fakeServer,
+    // data-… 속성이 붙은 버튼을 누른 것처럼
+    click: async (dataset) => {
+      onClick?.({ target: { closest: () => ({ dataset }) } });
+      await tickWait();
+    },
+    hasClick: () => onClick !== null,
+    stop: () => {
+      fakeServer.stop();
+      timers.forEach(clearInterval);
+      globalThis.setInterval = realSetInterval;
+    },
+  };
+}
+
+{
+  const app = await bootApp("?fake", "basic");
+  const { el } = app;
   assert.equal(el("server .value").textContent, "연결됨");
   assert.equal(el("robots .value").textContent, "4/4대");
   assert.equal((el("robot-list").innerHTML.match(/<li /g) || []).length, 4);
@@ -274,9 +302,70 @@ assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(N
   assert.ok(svg.includes("비상구 1") && svg.includes("비상구 2") && svg.includes("충전 스테이션"));
   assert.ok(!/화재|통로 차단|밟힘/.test(svg));
   assert.match(el("time").textContent, /^\d\d:\d\d:\d\d$/);
-  globalThis.fake.stop();
-  timers.forEach(clearInterval);
-  globalThis.setInterval = realSetInterval;
+  // 기본 화면: 경보 상세 칸은 HTML에서 hidden 그대로, 최근 경보는 누를 수 없음
+  assert.equal(el("detail").innerHTML, "");
+  assert.ok(!el("alerts").innerHTML.includes("data-alert"));
+  assert.ok(!app.hasClick());
+  app.stop();
+}
+
+// ---------- 6) 관리자 화면: 경보 상세와 처리 완료 ----------
+{
+  const app = await bootApp("?fake&admin", "admin");
+  const { el, fake } = app;
+  assert.equal(el("detail-panel").hidden, false);
+  assert.match(el("detail").innerHTML, /처리할 경보가 없습니다/);
+
+  // 경보가 오면 가장 새 경보가 상세에 뜬다
+  const ob = fake.emit("obstacle", "A");
+  await tickWait();
+  let d = el("detail").innerHTML;
+  assert.match(d, /통로 차단/);
+  assert.match(d, /사진 없음/); // 가짜 로봇은 사진이 없다
+  assert.match(d, new RegExp(`data-check="${ob.id}"`));
+  assert.match(d, /<dt>사람<\/dt>/);
+  assert.match(el("alerts").innerHTML, new RegExp(`data-alert="${ob.id}"`));
+
+  // 다른 경보가 와도, 고른 경보가 상세에 남는다
+  const heat = fake.emit("heat", "B");
+  await tickWait();
+  assert.match(el("detail").innerHTML, new RegExp(`data-check="${heat.id}"`)); // 고른 게 없으면 새것
+  await app.click({ alert: String(ob.id) });
+  assert.match(el("detail").innerHTML, new RegExp(`data-check="${ob.id}"`));
+  assert.match(el("alerts").innerHTML, /class="selected"/);
+
+  // 처리 완료 → 서버에 보내고 목록에서 빠짐
+  await app.click({ check: String(ob.id) });
+  await tickWait();
+  assert.equal(fake.events.find((e) => e.id === ob.id).checked, true);
+  assert.ok(!el("alerts").innerHTML.includes(`data-alert="${ob.id}"`));
+  assert.match(el("detail").innerHTML, new RegExp(`data-check="${heat.id}"`)); // 남은 경보로 넘어감
+  assert.match(el("detail").innerHTML, /<dt>온도<\/dt>/);
+  assert.ok(!el("detail").innerHTML.includes("신뢰도")); // 과열은 온도로 판단해서 신뢰도를 안 보여 줌
+
+  // 화재: 한 번 더 확인. 취소하면 그대로
+  const fire = fake.emit("flame", "C");
+  await tickWait();
+  await app.click({ check: String(fire.id) });
+  assert.match(el("detail").innerHTML, /대피 모드는 따로 해제/);
+  assert.equal(fake.events.find((e) => e.id === fire.id).checked, false);
+  await app.click({ cancel: "1" });
+  assert.ok(!el("detail").innerHTML.includes("대피 모드는 따로 해제"));
+  await app.click({ check: String(fire.id) });
+  await app.click({ check: String(fire.id), sure: "1" });
+  await tickWait();
+  assert.equal(fake.events.find((e) => e.id === fire.id).checked, true);
+
+  // 처리 완료를 못 보내면 알려 준다 (없는 경보 번호 → 404)
+  const heatId = heat.id;
+  fake.events.find((e) => e.id === heatId).id = 9999; // 서버 쪽에서만 번호가 바뀐 것처럼
+  await app.click({ check: String(heatId) });
+  await tickWait();
+  assert.match(el("detail").innerHTML, /처리 완료를 보내지 못했습니다 \(서버 응답 404\)/);
+
+  // 지도에 로봇 위치
+  assert.equal((el("map .robots").innerHTML.match(/class="robot"/g) || []).length, 4);
+  app.stop();
 }
 
 console.log("dashboard selfcheck OK");

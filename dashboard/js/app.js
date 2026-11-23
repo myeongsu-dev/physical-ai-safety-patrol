@@ -140,31 +140,143 @@ function renderRobotLayer(s) {
   document.getElementById("map").querySelector(".robots").innerHTML = robotLayer(list);
 }
 
-// 최근 경보 (처리 완료 안 된 것, 새것부터)
+// ---------- 최근 경보와 경보 상세 ----------
+// 관리자 화면에서는 최근 경보를 눌러 오른쪽 경보 상세 칸에서 보고 처리 완료한다.
+// 고른 경보가 없으면 가장 새 경보를 보여 준다.
+const detail = {
+  selected: null, // 고른 경보 id
+  pending: null, // 처리 완료를 보내는 중인 id
+  confirming: null, // 화재: 한 번 더 확인을 기다리는 id
+  error: null, // { id, text }
+};
+let alertsKey = "";
+let detailKey = "";
+
+function shownAlert(list) {
+  return list.find((e) => e.id === detail.selected) ?? list[0] ?? null;
+}
+
 function renderAlerts() {
   const list = openAlerts(store);
-  document.getElementById("alerts").innerHTML = list.length
-    ? list
-        .map((e) => {
-          const [label, cls] = ALERT_TEXT[e.type] ?? [e.type, ""];
-          const where = [e.marker != null ? `마커 ${esc(e.marker)}` : "", `로봇 ${esc(e.robot)}`]
-            .filter(Boolean)
-            .join(" · ");
-          return `<li><span class="type ${cls}">${esc(label)}</span>
-            <span class="at">${e.ts ? clock(e.ts * 1000) : ""}</span>
-            <span class="where">${where}</span></li>`;
-        })
-        .join("")
-    : `<li class="empty">처리할 경보가 없습니다</li>`;
+  const shown = admin ? shownAlert(list) : null;
+  // 1초마다 다시 그리면 사진이 다시 불러와지고 버튼 포커스가 풀리므로, 바뀐 것이 있을 때만 그린다
+  const key = list.map((e) => e.id).join(",") + "|" + (shown?.id ?? "");
+  if (key !== alertsKey) {
+    alertsKey = key;
+    document.getElementById("alerts").innerHTML = list.length
+      ? list.map((e) => alertItem(e, shown && e.id === shown.id)).join("")
+      : `<li class="empty">처리할 경보가 없습니다</li>`;
+  }
+  if (admin) renderDetail(shown);
+}
+
+function alertItem(e, selected) {
+  const [label, cls] = ALERT_TEXT[e.type] ?? [e.type, ""];
+  const where = [e.marker != null ? `마커 ${esc(e.marker)}` : "", `로봇 ${esc(e.robot)}`].filter(Boolean).join(" · ");
+  const body = `<span class="type ${cls}">${esc(label)}</span>
+    <span class="at">${e.ts ? clock(e.ts * 1000) : ""}</span>
+    <span class="where">${where}</span>`;
+  // 기본 화면에서는 누를 수 없다 (처리 완료는 관리자 화면에서만)
+  if (!admin) return `<li>${body}</li>`;
+  return `<li class="${selected ? "selected" : ""}"><button type="button" class="alert-btn" data-alert="${e.id}"
+    aria-pressed="${selected}">${body}</button></li>`;
+}
+
+function renderDetail(e) {
+  const key = JSON.stringify([e?.id, detail.pending, detail.confirming, detail.error]);
+  if (key === detailKey) return;
+  detailKey = key;
+  const el = document.getElementById("detail");
+  if (!e) {
+    el.innerHTML = `<p class="empty">처리할 경보가 없습니다</p>`;
+    return;
+  }
+  const [label, cls] = ALERT_TEXT[e.type] ?? [e.type, ""];
+
+  const photo = e.photo
+    ? `<a class="photo" href="${esc(e.photo)}" target="_blank" rel="noopener" title="누르면 크게 봅니다">
+        <img src="${esc(e.photo)}" alt="${esc(label)} 경보 사진"></a>`
+    : `<div class="photo none">사진 없음</div>`;
+
+  let action;
+  if (detail.pending === e.id) {
+    action = `<button type="button" class="check" disabled>보내는 중</button>`;
+  } else if (detail.confirming === e.id) {
+    // 화재는 처리 완료 전에 화면 안에서 한 번 더 확인한다. 대피 해제는 따로 한다
+    action = `<p class="confirm-text">화재 경보를 처리 완료할까요? 대피 모드는 따로 해제해야 합니다.</p>
+      <div class="actions"><button type="button" class="check danger" data-check="${e.id}" data-sure="1">처리 완료</button>
+      <button type="button" class="cancel" data-cancel="1">취소</button></div>`;
+  } else {
+    action = `<button type="button" class="check" data-check="${e.id}">처리 완료</button>`;
+  }
+  const err = detail.error && detail.error.id === e.id ? `<p class="error">${esc(detail.error.text)}</p>` : "";
+
+  const rows = [["시각", e.ts ? `${dateText(e.ts * 1000)} ${clock(e.ts * 1000)}` : "-"], ["로봇", e.robot]];
+  rows.push(["위치", e.marker != null ? `마커 ${e.marker}` : "-"]);
+  // 과열은 온도로 판단하는 경보라 로봇이 신뢰도를 0으로 보낸다. 0%로 보이면 오해하니 뺀다
+  if (e.conf != null && e.type !== "heat") rows.push(["신뢰도", `${Math.round(e.conf * 100)}%`]);
+  if ((e.type === "flame" || e.type === "heat") && e.temp_c != null) rows.push(["온도", `${e.temp_c}°C`]);
+  if (e.type === "obstacle" && e.person != null) rows.push(["사람", e.person ? "있음" : "없음"]);
+
+  el.innerHTML = `<div class="detail-head"><span class="type ${cls}">${esc(label)}</span>
+      <span class="muted">경보 ${esc(e.id)}번</span></div>
+    ${photo}
+    ${action}
+    ${err}
+    <dl class="fields">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`;
+}
+
+async function checkAlert(id, sure) {
+  const e = store.events.get(id);
+  if (!e || detail.pending) return;
+  if (e.type === "flame" && !sure) {
+    detail.confirming = id;
+    render();
+    return;
+  }
+  detail.confirming = null;
+  detail.pending = id;
+  detail.error = null;
+  render();
+  try {
+    const res = await conn.request(`/events/${id}/check`, { method: "POST" });
+    if (!res.ok) throw new Error(`서버 응답 ${res.status}`);
+    // 서버가 WebSocket으로도 checked:true를 다시 보내지만, 받은 답으로 바로 반영한다
+    apply(store, await res.json());
+    if (detail.selected === id) detail.selected = null;
+  } catch (err) {
+    detail.error = { id, text: `처리 완료를 보내지 못했습니다 (${err.message})` };
+  } finally {
+    detail.pending = null;
+    render();
+  }
+}
+
+function onClick(ev) {
+  const t = ev.target.closest?.("[data-alert], [data-check], [data-cancel]");
+  if (!t) return;
+  if (t.dataset.alert) {
+    detail.selected = Number(t.dataset.alert);
+    detail.confirming = null;
+    render();
+  } else if (t.dataset.check) {
+    checkAlert(Number(t.dataset.check), t.dataset.sure === "1");
+  } else if (t.dataset.cancel) {
+    detail.confirming = null;
+    render();
+  }
 }
 
 function renderClock(now) {
-  const d = new Date(now);
+  document.getElementById("date").textContent = dateText(now);
+  document.getElementById("time").textContent = clock(now);
+}
+
+function dateText(t) {
+  const d = new Date(t);
   const days = ["일", "월", "화", "수", "목", "금", "토"];
   const pad = (n) => String(n).padStart(2, "0");
-  document.getElementById("date").textContent =
-    `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} (${days[d.getDay()]})`;
-  document.getElementById("time").textContent = clock(now);
+  return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} (${days[d.getDay()]})`;
 }
 
 function clock(t) {
@@ -199,6 +311,8 @@ document.getElementById("legend").innerHTML = legendHtml({ robots: admin });
 if (admin) {
   document.title = "안전 순찰 관제 (관리자)";
   document.getElementById("view-name").hidden = false;
+  document.getElementById("detail-panel").hidden = false;
+  document.addEventListener("click", onClick);
 }
 
 // 위의 함수와 값이 모두 준비된 뒤에 연결을 시작한다 (연결 중에도 바로 render를 부르기 때문)
