@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>안전 순찰 관제</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="bar">
+  <h1>안전 순찰 관제</h1>
+  <div class="conn">
+    <div class="conn-item" id="server">
+      <span class="dot"></span>
+      <span class="label">서버</span>
+      <span class="value">연결 중</span>
+    </div>
+    <div class="conn-item" id="robots">
+      <span class="dot"></span>
+      <span class="label">로봇</span>
+      <span class="value">-</span>
+    </div>
+  </div>
+</header>
+
+<div class="notice" id="notice" hidden></div>
+
+<main>
+  <section class="robot-list" aria-label="로봇 연결">
+    <h2>로봇 연결</h2>
+    <ul id="robot-list"></ul>
+  </section>
+</main>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

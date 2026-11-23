@@ -1,0 +1,76 @@
+:root {
+  --bg: #ffffff;
+  --text: #1a1a1a;
+  --muted: #666666;
+  --line: #dddddd;
+  --ok: #1f7a3a;
+  --bad: #b3261e;
+  --bad-bg: #fbeaea;
+  --gap: 8px;
+  --radius: 4px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 "Pretendard", "Noto Sans KR", system-ui, sans-serif;
+}
+
+h1, h2 { margin: 0; font-weight: 600; }
+h1 { font-size: 18px; }
+h2 { font-size: 15px; margin-bottom: var(--gap); }
+
+/* ---------- 위 막대: 제목과 연결 상태 ---------- */
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: calc(var(--gap) * 2);
+  padding: calc(var(--gap) * 1.5) calc(var(--gap) * 2);
+  border-bottom: 1px solid var(--line);
+}
+
+.conn { display: flex; flex-wrap: wrap; gap: calc(var(--gap) * 3); }
+.conn-item { display: flex; align-items: center; gap: 6px; }
+.conn-item .label { color: var(--muted); }
+.conn-item .value { font-variant-numeric: tabular-nums; }
+.conn-item.bad .value { color: var(--bad); font-weight: 600; }
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--line);
+}
+.ok > .dot { background: var(--ok); }
+.bad > .dot { background: var(--bad); }
+
+/* ---------- 끊김 알림 줄 ---------- */
+.notice {
+  padding: var(--gap) calc(var(--gap) * 2);
+  background: var(--bad-bg);
+  color: var(--bad);
+  border-bottom: 1px solid var(--bad);
+  font-weight: 600;
+}
+
+main { padding: calc(var(--gap) * 2); }
+
+/* ---------- 로봇 연결 목록 ---------- */
+.robot-list ul { list-style: none; margin: 0; padding: 0; max-width: 480px; }
+.robot-list li {
+  display: grid;
+  grid-template-columns: 16px 3em 1fr auto;
+  align-items: center;
+  gap: var(--gap);
+  padding: var(--gap) 0;
+  border-bottom: 1px solid var(--line);
+}
+.robot-list .name { font-weight: 600; }
+.robot-list .state { color: var(--muted); }
+.robot-list .bad .state { color: var(--bad); font-weight: 600; }
+.robot-list .seen { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }

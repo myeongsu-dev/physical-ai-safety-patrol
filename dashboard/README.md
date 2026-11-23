@@ -114,7 +114,11 @@
 
 ## 개발
 
-- 서버 없이: `dashboard/` 안에 가짜 메시지를 흘려 주는 시험 파일로 화면을 먼저 만듭니다 (만들 예정)
+- 서버 없이: 가짜 서버 [js/fake.js](js/fake.js)가 진짜 서버와 같은 모양으로 메시지를 흘려 줍니다.
+  - 저장소 폴더(`physical-ai-safety-patrol`)에서 `python -m http.server 8080 -d dashboard`를 켜고 `http://localhost:8080/fake.html`을 엽니다 (파일을 바로 열면 JS 모듈이 안 불러와집니다)
+  - 경보 보내기, 화재와 대피를 버튼으로 해 볼 수 있습니다
+  - 진짜 서버는 끊긴 로봇의 state를 더 보내지 않습니다. 로봇 연결 끊김은 화면이 마지막 state를 받은 시각으로 판단해야 합니다
+- 셀프 체크: `node dashboard/selfcheck.mjs`. 지도 데이터 [js/mapdata.js](js/mapdata.js)가 `server/map_config.py`와 같은지, 가짜 서버가 진짜 서버와 같은 순서·모양으로 보내는지 봅니다. CI가 `check.sh`로 돌립니다
 - 서버와 같이: `python -m server.fake_robots`와 `python -m server.api`를 켜고 브라우저로 엽니다
 - 브라우저는 화면을 한 번 누르기 전에는 소리를 막습니다. 관리자 화면에 "경보음 켜기" 버튼을 둡니다.
 - 경보는 2초 안에 화면에 떠야 합니다.

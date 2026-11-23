@@ -5,5 +5,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-echo "dashboard: 아직 검사 없음"
-# 예: node dashboard/selfcheck.mjs
+node dashboard/selfcheck.mjs
