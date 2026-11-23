@@ -6,7 +6,7 @@ from common import protocol
 from edge import config
 from edge.agent import Agent
 from edge.camera import SOI, EOI, Frame, split_jpegs
-from edge.detect import Det, Voter, find_model, no_helmet
+from edge.detect import CLASS_CONF, Det, Voter, filter_conf, find_model, has_person, no_helmet
 from edge.dog_link import BoardState, FakeDog, battery_pct
 from edge.reporter import Reporter, photo_name, photo_url_from
 from edge.thermo import FakeThermo, raw_to_c
@@ -64,9 +64,16 @@ def check_parts():
 
     with tempfile.TemporaryDirectory() as d:
         for ver in ("v1", "v2", "v10"):
-            (Path(d) / "helmet" / ver / "best_ncnn_model").mkdir(parents=True)
-        assert find_model("helmet", d).parent.name == "v10"
-        assert find_model("flame", d) is None
+            (Path(d) / "safety" / ver / "best_ncnn_model").mkdir(parents=True)
+        assert find_model("safety", d).parent.name == "v10"
+        assert find_model("helmet", d) is None
+
+    # 통합 모델: 클래스별 기준 (head 는 HELMET_CONF, fire 는 FLAME_CONF), 모르는 클래스는 버림
+    cc = {"person": 0.5, "head": 0.5, "helmet": 0.5, "fire": 0.4}
+    kept = filter_conf([Det("head", 0.45, ()), Det("fire", 0.45, ()), Det("vest", 0.99, ())], cc)
+    assert [d.cls for d in kept] == ["fire"], kept
+    assert set(CLASS_CONF) == {"person", "head", "helmet", "fire"}
+    assert has_person([Det("helmet", 0.9, ())]) and not has_person([Det("fire", 0.9, ())])
 
     assert photo_name("B", 0, ()).startswith("B_") and photo_name("B", 0, ()).endswith(".jpg")
     n = photo_name("B", 0, ())
@@ -91,7 +98,7 @@ def check_reporter(spool):
     assert not Reporter("B", spool_dir=spool).outbox
 
 
-def make(spool, helmet=None, flame=None, temp=25.0):
+def make(spool, model=None, temp=25.0):
     clock = Clock()
     dog = FakeDog()
     rep = Reporter("B", spool_dir=spool)
@@ -102,7 +109,7 @@ def make(spool, helmet=None, flame=None, temp=25.0):
     rep.start = lambda: None
     rep.stop = lambda: None
     th = FakeThermo(temp, clock=clock)
-    ag = Agent(dog, Cam(clock), th, rep, helmet=helmet, flame=flame, clock=clock, version="test")
+    ag = Agent(dog, Cam(clock), th, rep, model=model, clock=clock, version="test")
     ag.start()
     return ag, dog, th, clock, events, states
 
@@ -177,7 +184,7 @@ def check_agent(spool):
     assert ag.status == "idle" and ag.target is None
 
     # 안전모: 맨머리 5장 중 3장 → helmet 보고 1번 (쿨다운)
-    ag, dog, th, clock, events, _ = make(spool, helmet=Det1([Det("person", 0.9, ()), Det("head", 0.8, ())]))
+    ag, dog, th, clock, events, _ = make(spool, model=Det1([Det("person", 0.9, ()), Det("head", 0.8, ())]))
     run(ag, clock, 2.0)
     assert [e[0] for e in events] == ["helmet"] and events[0][2]["conf"] == 0.8
     assert ("A", config.VOICE_HELMET, config.VOICE_VOLUME) in dog.sent
@@ -193,11 +200,12 @@ def check_agent(spool):
     obs = [e for e in events if e[0] == "obstacle"]
     assert len(obs) == 1 and obs[0][2]["person"] is True
 
-    # 과열 + 불꽃 모델이 3장 이상 fire → heat(flame=True) + flame
-    ag, dog, th, clock, events, _ = make(spool, flame=Det1([Det("fire", 0.77, ())]), temp=60.0)
+    # 과열 + 통합 모델이 3장 이상 fire → heat(flame=True) + flame. 과열 확인 중에는 안전모 판정 안 함
+    ag, dog, th, clock, events, _ = make(spool, model=Det1([Det("fire", 0.77, ()), Det("head", 0.9, ())]), temp=60.0)
     run(ag, clock, config.HEAT_RECHECK_S * config.HEAT_CHECKS + 1.5)
     kinds = [e[0] for e in events]
-    assert kinds == ["heat", "flame"] and events[0][2]["flame"] is True and events[1][2]["conf"] == 0.77
+    # 과열 보고 전까지는 helmet 이 끼지 않음 (보고 뒤에는 기존처럼 안전모 판정 다시 함)
+    assert kinds[:2] == ["heat", "flame"] and events[0][2]["flame"] is True and events[1][2]["conf"] == 0.77
 
     # 다시 재니 내려감 → 보고 없음
     ag, dog, th, clock, events, _ = make(spool, temp=50.0)

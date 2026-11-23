@@ -4,7 +4,7 @@
   python -m edge.hwcheck dog [--secs 5]        # 보드 V 응답, T 측정값 스트림, DTR·RTS로 다시 켜지지 않는지
   python -m edge.hwcheck cam [--secs 5]        # 초당 장 수 (목표 15), 마지막 장을 cam_check.jpg로
   python -m edge.hwcheck thermo                # GY-906 표면·주변 온도 10번
-  python -m edge.hwcheck detect helmet [--image a.jpg] [--n 30]   # 추론 속도 (목표 초당 10장)
+  python -m edge.hwcheck detect [--image a.jpg] [--n 30]   # 통합 모델 추론 속도 (목표 초당 10장)
   python -m edge.hwcheck mqtt                  # 브로커에 state 한 번 보내고 cmd·mode 10초 듣기
 """
 import argparse
@@ -147,7 +147,7 @@ def main(argv=None):
         p.add_argument("--secs", type=float, default=5)
     sub.add_parser("thermo")
     p = sub.add_parser("detect")
-    p.add_argument("name", choices=("helmet", "flame"))
+    p.add_argument("name", nargs="?", default="safety", help="models/ 아래 모델 폴더 (기본 safety)")
     p.add_argument("--image")
     p.add_argument("--port")
     p.add_argument("--n", type=int, default=30)

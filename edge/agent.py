@@ -16,7 +16,7 @@ import time
 
 from common import protocol
 from edge import config
-from edge.detect import FLAME, HELMET, Detector, Voter, fire, has_person, no_helmet
+from edge.detect import SAFETY, Detector, Voter, fire, has_person, no_helmet
 from edge.dog_link import BoardState
 from edge.thermo import is_suspect
 
@@ -47,9 +47,9 @@ def git_version():
 
 
 class Agent:
-    def __init__(self, dog, cam, thermo, reporter, helmet=None, flame=None, clock=time.monotonic, version=None):
+    def __init__(self, dog, cam, thermo, reporter, model=None, clock=time.monotonic, version=None):
         self.dog, self.cam, self.thermo, self.reporter = dog, cam, thermo, reporter
-        self.helmet, self.flame = helmet, flame
+        self.model = model        # 통합 모델 (person·head·helmet·fire), 한 장에 한 번 추론
         self.clock = clock
         self.version = version or git_version()
         self.board = BoardState()
@@ -82,8 +82,7 @@ class Agent:
             dev.open()
         self._start_stream()
         self.reporter.start()
-        log.info("로봇 %s 시작 (버전 %s, 안전모 모델 %s, 불꽃 모델 %s)", config.ROBOT_ID, self.version,
-                 self._model_ver(self.helmet), self._model_ver(self.flame))
+        log.info("로봇 %s 시작 (버전 %s, 통합 모델 %s)", config.ROBOT_ID, self.version, self._model_ver(self.model))
 
     @staticmethod
     def _model_ver(det):
@@ -203,7 +202,7 @@ class Agent:
         self.status = "blocked"
         self.near = 0
         frame = self.cam.latest()
-        dets = self.helmet(frame.image) if (frame and self.helmet is not None and self.helmet.ready) else []
+        dets = self.model(frame.image) if (frame and self.model is not None and self.model.ready) else []
         self.blocked = {"since": self.clock(), "person": has_person(dets), "reported": False}
         if self.blocked["person"]:
             log.info("막힘: 사람 → 비킬 때까지 기다림")
@@ -342,16 +341,19 @@ class Agent:
         if frame is None or frame.ts == self.last_frame_ts:
             return
         self.last_frame_ts = frame.ts
-        if self.heat and not self.heat["reported"]:
-            if self.flame is not None and self.flame.ready:  # 불꽃 모델은 과열 의심 때만
-                hit, c = fire(self.flame(frame.image))
-                self.heat["flame"] = max(self.heat["flame"], c)
-                if self.flame_vote.push(hit):
-                    self.heat["flame_hit"] = True
+        if self.model is None or not self.model.ready:
             return
-        if self.helmet is None or not self.helmet.ready or self.status == "guide":
+        heat_check = self.heat and not self.heat["reported"]
+        if not heat_check and self.status == "guide":
             return
-        hit, c = no_helmet(self.helmet(frame.image))
+        dets = self.model(frame.image)   # 통합 모델: 한 장에 한 번 추론하고 결과를 나눠 씀
+        if heat_check:                   # 불꽃 판정은 과열 의심 때만 (그동안 안전모 판정은 쉼)
+            hit, c = fire(dets)
+            self.heat["flame"] = max(self.heat["flame"], c)
+            if self.flame_vote.push(hit):
+                self.heat["flame_hit"] = True
+            return
+        hit, c = no_helmet(dets)
         if self.helmet_vote.push(hit) and self._cooled("helmet", now):
             self.reporter.report_event("helmet", jpeg=frame.jpeg, marker=self.marker, conf=round(c, 2))
             self.dog.send("A", config.VOICE_HELMET, config.VOICE_VOLUME)
@@ -407,8 +409,7 @@ def main(argv=None):
         from edge.thermo import Thermo
         thermo = Thermo()
 
-    agent = Agent(dog, cam, thermo, Reporter(),
-                  helmet=Detector(HELMET, config.HELMET_CONF), flame=Detector(FLAME, config.FLAME_CONF))
+    agent = Agent(dog, cam, thermo, Reporter(), model=Detector(SAFETY))
     agent.start()
     if a.fake:
         threading.Thread(target=_fake_scene, args=(dog,), daemon=True).start()
