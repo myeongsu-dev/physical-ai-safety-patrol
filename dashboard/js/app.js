@@ -217,7 +217,7 @@ function historyRow(h, selected) {
     <td>${e.marker != null ? `마커 ${esc(e.marker)}` : "-"}</td>
     <td class="${h.checkedAt ? "done" : "open"}">${state}</td>
     <td>${e.photo
-      ? `<a class="photo-btn" href="${esc(e.photo)}" target="_blank" rel="noopener">사진 보기</a>`
+      ? `<a class="photo-btn" href="${esc(e.photo)}" data-photo="${esc(e.photo)}">사진 보기</a>`
       : `<span class="no-photo">사진 없음</span>`}</td>
   </tr>`;
 }
@@ -305,7 +305,7 @@ function renderDetail(e) {
   const [label, cls] = ALERT_TEXT[e.type] ?? [e.type, ""];
 
   const photo = e.photo
-    ? `<a class="photo" href="${esc(e.photo)}" target="_blank" rel="noopener" title="누르면 크게 봅니다">
+    ? `<a class="photo" href="${esc(e.photo)}" data-photo="${esc(e.photo)}" title="누르면 크게 봅니다">
         <img src="${esc(e.photo)}" alt="${esc(label)} 경보 사진"></a>`
     : `<div class="photo none">사진 없음</div>`;
 
@@ -394,7 +394,7 @@ function renderPopup() {
   const [label, cls] = ALERT_TEXT[e.type] ?? [e.type, ""];
   const more = alertState.queue.length - 1;
   const photo = e.photo
-    ? `<a class="photo" href="${esc(e.photo)}" target="_blank" rel="noopener" title="누르면 크게 봅니다">
+    ? `<a class="photo" href="${esc(e.photo)}" data-photo="${esc(e.photo)}" title="누르면 크게 봅니다">
         <img src="${esc(e.photo)}" alt="${esc(label)} 경보 사진"></a>`
     : `<div class="photo none">사진 없음</div>`;
   const pos = MARKER_POS[e.marker];
@@ -485,12 +485,36 @@ async function checkAlert(id, sure) {
   }
 }
 
+// ---------- 사진 크게 보기 ----------
+// 다른 페이지로 열면 탭이 없는 브라우저(전체 화면, VS Code 안 브라우저)에서 대시보드로 돌아오기 어렵다.
+// 그래서 대시보드 위에 띄우고 닫기·Esc로 닫는다
+function openViewer(url) {
+  const el = document.getElementById("viewer");
+  el.innerHTML = `<div class="viewer" role="dialog" aria-modal="true" aria-label="경보 사진">
+    <img src="${esc(url)}" alt="경보 사진">
+    <button type="button" class="viewer-close" data-viewer-close="1">닫기</button>
+  </div>`;
+  el.hidden = false;
+  el.querySelector?.(".viewer-close")?.focus?.();
+}
+
+function closeViewer() {
+  const el = document.getElementById("viewer");
+  el.hidden = true;
+  el.innerHTML = "";
+}
+
 function onClick(ev) {
   const t = ev.target.closest?.(
-    "[data-alert], [data-check], [data-cancel], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel]",
+    "[data-alert], [data-check], [data-cancel], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel], [data-photo], [data-viewer-close]",
   );
   if (!t) return;
-  if (t.dataset.alert) {
+  if (t.dataset.photo) {
+    ev.preventDefault?.(); // 링크로 다른 페이지를 열지 않는다
+    openViewer(t.dataset.photo);
+  } else if (t.dataset.viewerClose) {
+    closeViewer();
+  } else if (t.dataset.alert) {
     detail.selected = Number(t.dataset.alert);
     detail.confirming = null;
     alertState.blink.delete(detail.selected); // 눌러서 봤으면 깜빡임을 멈춘다
@@ -573,7 +597,10 @@ if (admin) {
   renderSoundButton();
   document.addEventListener("click", onClick);
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && !document.getElementById("popup").hidden) closePopup();
+    if (ev.key !== "Escape") return;
+    // 사진 보기가 떠 있으면 그것부터 닫는다
+    if (!document.getElementById("viewer").hidden) closeViewer();
+    else if (!document.getElementById("popup").hidden) closePopup();
   });
 }
 

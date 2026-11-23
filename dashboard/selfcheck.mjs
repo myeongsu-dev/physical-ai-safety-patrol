@@ -518,7 +518,13 @@ class FakeAudioContext {
   fake.robots.B.eventFields = (t) => ({ ...orig(t), photo: "/photos/B_1123_120000.jpg" });
   fake.emit("obstacle", "B");
   await tickWait();
-  assert.match(el("history").innerHTML, /<a class="photo-btn" href="\/photos\/B_1123_120000.jpg" target="_blank"/);
+  assert.match(el("history").innerHTML, /<a class="photo-btn" href="\/photos\/B_1123_120000.jpg" data-photo="\/photos\/B_1123_120000.jpg"/);
+  // 사진 보기: 다른 페이지가 아니라 대시보드 위에 띄우고 닫기로 닫는다
+  await app.click({ photo: "/photos/B_1123_120000.jpg" });
+  assert.equal(el("viewer").hidden, false);
+  assert.match(el("viewer").innerHTML, /<img src="\/photos\/B_1123_120000.jpg"/);
+  await app.click({ viewerClose: "1" });
+  assert.equal(el("viewer").hidden, true);
 
   // 경보 이력: 해제한 경보도 남고, 눌러 보면 상세에 버튼 없이 해제 시각
   assert.match(el("history").innerHTML, new RegExp(`data-alert="${fire.id}"`));
