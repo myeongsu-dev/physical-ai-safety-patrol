@@ -39,6 +39,7 @@ python -m edge.agent --patrol            # 서버 없이 바로 순찰
 ```
 
 설정은 저장소 맨 위 `.env`: `ROBOT_ID` · `DOG_PORT` · `CAM_PORT` · `MQTT_HOST` · `MQTT_PORT` · `SERVER_URL`.
+`DOG_PORT` · `CAM_PORT`는 기기와 꽂는 순서마다 다르므로 `.env.example` 값을 그대로 쓰지 말고 `python -m edge.hwcheck ports`로 찾아 바꿉니다.
 그 밖의 값(`DOG_BAUD`, `HEAT_SUSPECT_C`, `VOICE_OBSTACLE` …)은 `config.py`에 기본값이 있고 `.env`에 같은 이름으로 적으면 바뀝니다.
 못 보낸 이벤트와 사진은 `~/potent-spool/`에 남습니다 (`EDGE_SPOOL`로 바꿈).
 
@@ -50,7 +51,7 @@ sudo usermod -aG dialout,i2c $USER       # 시리얼·I2C 권한 (다시 로그�
 python -m venv ~/venv && ~/venv/bin/pip install -r edge/requirements.txt
 i2cdetect -y 1                           # 5a가 보여야 GY-906 배선 OK
 
-python -m edge.hwcheck ports             # 보드·XIAO가 몇 번 ttyACM인지 → .env
+python -m edge.hwcheck ports             # 보드·XIAO 포트 이름 → 자기 .env의 DOG_PORT · CAM_PORT
 python -m edge.hwcheck dog               # V 응답, 측정값, 포트 열 때 보드가 다시 켜지지 않는지
 python -m edge.hwcheck cam               # 초당 장 수 (목표 15), cam_check.jpg
 python -m edge.hwcheck thermo
