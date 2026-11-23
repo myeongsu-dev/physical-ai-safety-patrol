@@ -6,6 +6,8 @@
   --ok: #1f7a3a;
   --bad: #b3261e;
   --bad-bg: #fbeaea;
+  --warn: #8a5a00;
+  --warn-bg: #fff3d6;
   --gap: 8px;
   --radius: 4px;
 }
@@ -58,7 +60,42 @@ h2 { font-size: 15px; margin-bottom: var(--gap); }
   font-weight: 600;
 }
 
+/* ---------- 대피 모드: 화면 맨 위에 크게 ---------- */
+.evacuate {
+  padding: calc(var(--gap) * 2);
+  background: var(--bad);
+  color: #ffffff;
+  font-size: 24px;
+  font-weight: 700;
+  text-align: center;
+}
+
 main { padding: calc(var(--gap) * 2); }
+
+/* ---------- 현재 모드, 안전 현황, 건수 ---------- */
+.status { margin-bottom: calc(var(--gap) * 3); }
+.status dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--gap) * 2) calc(var(--gap) * 5);
+  margin: 0;
+}
+.status dt { color: var(--muted); font-size: 13px; }
+.status dd { margin: 2px 0 0; font-size: 20px; font-weight: 600; }
+.status .count { font-variant-numeric: tabular-nums; }
+.status .count.has { color: var(--bad); }
+#mode.evacuate-text { color: var(--bad); }
+
+.level {
+  display: inline-block;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.level.safe { color: var(--ok); border-color: var(--ok); }
+.level.caution { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
+.level.fire { color: #ffffff; border-color: var(--bad); background: var(--bad); }
+.level.unknown { color: var(--muted); }
 
 /* ---------- 로봇 연결 목록 ---------- */
 .robot-list ul { list-style: none; margin: 0; padding: 0; max-width: 480px; }

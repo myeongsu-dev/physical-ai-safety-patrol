@@ -1,12 +1,14 @@
-// 기본 화면. 지금은 서버·로봇 연결 상태만 보여 준다.
+// 기본 화면. 서버·로봇 연결 상태, 현재 모드, 안전 현황을 보여 준다.
 
-import { createStore, apply, setServer, connectionSummary } from "./store.js";
+import { createStore, apply, setServer, connectionSummary, safetySummary } from "./store.js";
 import { connect } from "./conn.js";
 
 const store = createStore();
 const params = new URLSearchParams(location.search);
 
 const STATUS_TEXT = { connecting: "연결 중", open: "연결됨", closed: "끊김" };
+const MODE_TEXT = { normal: "평상시", evacuate: "대피" };
+const LEVEL_TEXT = { safe: "안전", caution: "주의", fire: "화재", unknown: "확인 불가" };
 
 function render() {
   const now = Date.now();
@@ -34,6 +36,24 @@ function render() {
     notice.hidden = false;
   } else {
     notice.hidden = true;
+  }
+
+  // 현재 모드와 안전 현황. 서버가 끊겨 있으면 모를 값은 "-"
+  const safe = safetySummary(store, now);
+  // 대피 표시는 서버가 끊겨도 내리지 않는다. 마지막으로 받은 모드가 대피면 계속 보여 준다
+  const evacuate = safe.mode === "evacuate";
+  document.getElementById("evacuate").hidden = !evacuate;
+  const modeEl = document.getElementById("mode");
+  modeEl.textContent = serverOpen || evacuate ? MODE_TEXT[safe.mode] ?? safe.mode : "-";
+  modeEl.className = evacuate ? "evacuate-text" : "";
+  const levelEl = document.getElementById("level");
+  levelEl.textContent = LEVEL_TEXT[safe.level];
+  levelEl.className = "level " + safe.level;
+  for (const key of ["fire", "obstacle", "floor"]) {
+    const el = document.getElementById("count-" + key);
+    const n = safe.counts[key];
+    el.textContent = serverOpen ? `${n}건` : "-";
+    el.className = "count" + (serverOpen && n > 0 ? " has" : "");
   }
 
   // 로봇 목록

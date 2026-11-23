@@ -47,6 +47,32 @@ export function robotOnline(store, name, now = Date.now()) {
   return t != null && now - t <= ONLINE_SEC * 1000;
 }
 
+// 안전 현황 (README "안전 현황")
+//   화재: 대피 모드이거나 처리 완료 안 된 화재 경보가 있음
+//         교차 확인은 아직 서버에 없어서, 지금은 flame 경보가 오면 바로 화재로 본다
+//   주의: 처리 완료 안 된 통로 차단 · 밟힘 주의 · 과열 경보가 있거나, 끊긴 로봇이 있음
+//   안전: 그 밖
+// 안전모 미착용(helmet)은 화면에 보여 줄지 미정이라 넣지 않는다.
+// 서버가 끊겨 있으면 지금 상태를 알 수 없으므로 level은 "unknown"
+export function safetySummary(store, now = Date.now()) {
+  const counts = { fire: 0, obstacle: 0, floor: 0 }; // 화재·과열, 통로 차단, 밟힘 주의
+  for (const e of store.events.values()) {
+    if (e.type === "flame" || e.type === "heat") counts.fire += 1;
+    else if (e.type === "obstacle") counts.obstacle += 1;
+    else if (e.type === "floor_object") counts.floor += 1;
+  }
+  const flame = [...store.events.values()].some((e) => e.type === "flame");
+  const heat = counts.fire > 0 && !flame;
+  const offline = connectionSummary(store, now).robots.filter((r) => !r.online).length;
+
+  let level = "safe";
+  if (store.server !== "open") level = "unknown";
+  else if (store.mode === "evacuate" || flame) level = "fire";
+  else if (heat || counts.obstacle || counts.floor || offline) level = "caution";
+
+  return { level, mode: store.mode, counts, offline };
+}
+
 // 화면에 보여 줄 로봇 연결 요약
 export function connectionSummary(store, now = Date.now()) {
   const names = [...new Set([...ROBOTS, ...Object.keys(store.robots)])];

@@ -2,13 +2,14 @@
 // 1) js/mapdata.js가 server/map_config.py와 같은지
 // 2) 가짜 서버가 진짜 서버와 같은 순서·모양으로 메시지를 보내는지
 // 3) 로봇 연결 끊김 판단 (js/store.js)
-// 4) 화면 파일(js/app.js)이 오류 없이 돌아가는지
+// 4) 안전 현황 단계와 건수
+// 5) 화면 파일(js/app.js)이 오류 없이 돌아가는지
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN } from "./js/mapdata.js";
 import { FakeServer, EVENT_TYPES } from "./js/fake.js";
-import { createStore, apply, setServer, robotOnline, connectionSummary, ONLINE_SEC } from "./js/store.js";
+import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, ONLINE_SEC } from "./js/store.js";
 
 // ---------- 1) 지도 데이터 ----------
 function readMapConfig() {
@@ -155,7 +156,54 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
   assert.equal(connectionSummary(st2, T).online, 4);
 }
 
-// ---------- 4) 화면 파일이 오류 없이 돌아가는지 ----------
+// ---------- 4) 안전 현황 ----------
+{
+  const T = 2_000_000;
+  const st = createStore();
+  assert.equal(safetySummary(st, T).level, "unknown"); // 서버에 아직 못 붙음
+  setServer(st, "open", T);
+  for (const r of ["A", "B", "C", "D"]) apply(st, { kind: "state", robot: r, online: true }, T);
+  let s = safetySummary(st, T);
+  assert.equal(s.level, "safe");
+  assert.deepEqual(s.counts, { fire: 0, obstacle: 0, floor: 0 });
+
+  // 안전모 미착용은 단계와 건수에 안 들어감
+  apply(st, { kind: "event", id: 1, type: "helmet", checked: false }, T);
+  assert.equal(safetySummary(st, T).level, "safe");
+
+  // 통로 차단 · 밟힘 주의 · 과열 → 주의, 건수
+  apply(st, { kind: "event", id: 2, type: "obstacle", checked: false }, T);
+  apply(st, { kind: "event", id: 3, type: "floor_object", checked: false }, T);
+  apply(st, { kind: "event", id: 4, type: "heat", checked: false }, T);
+  s = safetySummary(st, T);
+  assert.equal(s.level, "caution");
+  assert.deepEqual(s.counts, { fire: 1, obstacle: 1, floor: 1 });
+
+  // 처리 완료하면 빠짐
+  for (const id of [2, 3, 4]) apply(st, { kind: "event", id, checked: true }, T);
+  assert.equal(safetySummary(st, T).level, "safe");
+
+  // 로봇 한 대가 끊기면 주의
+  for (const r of ["A", "B", "C"]) apply(st, { kind: "state", robot: r, online: true }, T + 6000);
+  s = safetySummary(st, T + 6000);
+  assert.equal(s.level, "caution");
+  assert.equal(s.offline, 1);
+
+  // 화재 경보나 대피 모드 → 화재
+  apply(st, { kind: "event", id: 5, type: "flame", checked: false }, T + 6000);
+  assert.equal(safetySummary(st, T + 6000).level, "fire");
+  assert.equal(safetySummary(st, T + 6000).counts.fire, 1);
+  apply(st, { kind: "event", id: 5, checked: true });
+  apply(st, { kind: "mode", mode: "evacuate" });
+  assert.equal(safetySummary(st, T + 6000).level, "fire");
+  apply(st, { kind: "mode", mode: "normal" });
+
+  // 서버가 끊기면 확인 불가
+  setServer(st, "closed", T + 7000);
+  assert.equal(safetySummary(st, T + 7000).level, "unknown");
+}
+
+// ---------- 5) 화면 파일이 오류 없이 돌아가는지 ----------
 // 브라우저 대신 아주 작은 가짜 document를 두고 js/app.js를 ?fake로 불러 본다
 {
   const els = {};
@@ -175,6 +223,14 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
   assert.equal(el("server .value").textContent, "연결됨");
   assert.equal(el("robots .value").textContent, "4/4대");
   assert.equal((el("robot-list").innerHTML.match(/<li /g) || []).length, 4);
+  assert.equal(el("mode").textContent, "평상시");
+  assert.equal(el("evacuate").hidden, true);
+  globalThis.fake.fire("A");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(el("mode").textContent, "대피");
+  assert.equal(el("evacuate").hidden, false);
+  assert.equal(el("level").textContent, "화재");
+  assert.equal(el("count-fire").textContent, "1건");
   globalThis.fake.stop();
   timers.forEach(clearInterval);
   globalThis.setInterval = realSetInterval;
