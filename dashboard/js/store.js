@@ -22,7 +22,8 @@ export function createStore() {
     server: "connecting", // connecting · open · closed
     serverSince: Date.now(), // 지금 server 상태가 된 시각 (ms)
     robots: {}, // 로봇 이름 → 마지막 state 메시지
-    seen: {}, // 로봇 이름 → state를 받은 시각 (ms). 서버가 끊겨 있다고 알려 주면 null
+    seen: {}, // 로봇 이름 → 마지막으로 연락된 시각 (ms). 모르면 null
+    offline: {}, // 로봇 이름 → 서버가 끊겼다고 알려 줌 (online:false)
     mode: "normal",
     events: new Map(), // id → 해제 안 된 경보
     // 경보 이력: id → { event, role, checkedAt }. 해제된 경보도 남긴다.
@@ -41,9 +42,17 @@ export function setServer(store, status, now = Date.now()) {
 export function apply(store, msg, now = Date.now()) {
   if (msg.kind === "state") {
     store.robots[msg.robot] = msg;
-    // 서버는 로봇 state가 올 때마다 online:true로 보낸다.
-    // 화면을 새로 열 때 받는 첫 묶음에는 이미 끊긴 로봇이 online:false로 온다.
-    store.seen[msg.robot] = msg.online === false ? null : now;
+    if (msg.online === false) {
+      // 서버가 끊겼다고 알려 준 경우: 화면을 새로 열 때의 첫 묶음, 또는 5초 넘게 state가 안 와서
+      // 서버가 한 번 보내 주는 알림 (server/link-status). 이 state의 다른 값은 마지막으로 받은 것
+      store.offline[msg.robot] = true;
+      // 마지막 연락 시각: seen_ago(초)가 있으면 그걸로, 없으면 이 화면이 마지막으로 받은 시각 그대로
+      if (typeof msg.seen_ago === "number") store.seen[msg.robot] = now - msg.seen_ago * 1000;
+      else store.seen[msg.robot] ??= null;
+    } else {
+      store.offline[msg.robot] = false;
+      store.seen[msg.robot] = now;
+    }
   } else if (msg.kind === "mode") {
     store.mode = msg.mode;
   } else if (msg.kind === "event") {
@@ -81,6 +90,7 @@ export function alertHistory(store, limit = 50) {
 // 서버는 로봇이 끊겨도 따로 알려 주지 않고 그 로봇의 state를 더 보내지 않는다.
 // 그래서 마지막으로 받은 시각으로 판단한다.
 export function robotOnline(store, name, now = Date.now()) {
+  if (store.offline[name]) return false; // 서버가 끊겼다고 알려 줌
   const t = store.seen[name];
   return t != null && now - t <= ONLINE_SEC * 1000;
 }
