@@ -15,6 +15,8 @@ heat 이벤트는 events.HeatCheck로 교차 확인해 출동·대피 명령을 
 | POST /robots/{로봇}/cmd | 명령 직접 보내기 (body: {"cmd": "stop"} 등) |
 | POST /mode | {"mode": "normal" · "evacuate"} (normal로 돌리면 교차 확인도 처음부터) |
 | GET /status | 지금 상태 (확인용) |
+
+state 메시지의 online이 false면 연결 끊김 (ONLINE_SEC초 넘게 state 없음). 끊길 때 한 번, 다시 붙을 때 다시 보낸다.
 | / | dashboard/ 폴더 (index.html이 생기면) |
 """
 import argparse
@@ -33,7 +35,7 @@ from fastapi.staticfiles import StaticFiles
 
 from common import protocol
 from server.events import EventLog, HeatCheck
-from server.fleet import Fleet
+from server.fleet import ONLINE_SEC, Fleet
 
 log = logging.getLogger("server")
 
@@ -73,8 +75,11 @@ class Hub:
 class Server:
     """MQTT와 화면 사이에서 상태를 들고 있는 것. mqtt=False면 브로커 없이(시험용)."""
 
-    def __init__(self, db_path=":memory:", photo_dir=PHOTO_DIR, mqtt=True, host="localhost", port=1883):
-        self.fleet = Fleet()
+    def __init__(self, db_path=":memory:", photo_dir=PHOTO_DIR, mqtt=True, host="localhost", port=1883,
+                 clock=time.time):
+        self.clock = clock
+        self.fleet = Fleet(clock=clock)
+        self.linked = {}    # 로봇 → 지난번에 본 연결 상태 (끊김·다시 붙음을 화면에 알리려고)
         self.events = EventLog(str(db_path))
         self.heat = HeatCheck(self.fleet)
         self.lock = threading.Lock()   # MQTT 스레드와 1초 tick이 heat를 같이 건드림
@@ -125,6 +130,9 @@ class Server:
             return
         if kind == "state":
             self.fleet.update_state(robot, msg)
+            if self.linked.get(robot) is False:
+                log.info("%s 다시 연결됨", robot)
+            self.linked[robot] = True
             self.hub.push(self.state_msg(robot))
         elif kind == "event":
             try:
@@ -139,7 +147,12 @@ class Server:
                     self.apply(self.heat.on_heat(robot, msg))
 
     def tick(self):
-        """1초마다: 교차 확인 시간 끝난 것 해제"""
+        """1초마다: 연결 끊긴 로봇 알리기, 교차 확인 시간 끝난 것 해제"""
+        for robot in list(self.fleet.robots):
+            if self.linked.get(robot) and not self.fleet.online(robot):
+                self.linked[robot] = False
+                log.warning("%s 연결 끊김 (%d초 넘게 state 없음)", robot, ONLINE_SEC)
+                self.hub.push(self.state_msg(robot))
         with self.lock:
             self.apply(self.heat.tick())
 
@@ -156,7 +169,8 @@ class Server:
         s = {k: v for k, v in self.fleet.robots[robot].items() if k != "seen"}
         return {"kind": "state", "robot": robot, **s,
                 "role": self.fleet.role_of(robot) or s.get("role"),
-                "online": self.fleet.online(robot)}
+                "online": self.fleet.online(robot),
+                "seen_ago": round(self.clock() - self.fleet.robots[robot]["seen"], 1)}
 
     def snapshot(self):
         return ([self.state_msg(r) for r in sorted(self.fleet.robots)]
@@ -282,7 +296,8 @@ def selfcheck():
     from fastapi.testclient import TestClient
 
     with tempfile.TemporaryDirectory() as tmp:
-        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False)
+        now = [time.time()]
+        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0])
         with TestClient(create_app(srv)) as c:
             # 로봇 두 대가 state를 보내면 대시보드 WebSocket에 붙자마자 보인다
             srv.on_mqtt("potent/A/state", protocol.pack({"marker": 15, "status": "idle", "battery": 90}))
@@ -322,6 +337,21 @@ def selfcheck():
             assert srv.sent[-2:] == [("potent/A/cmd", {"cmd": "wait"}), ("potent/B/cmd", {"cmd": "go", "zone": 7})]
             srv.on_mqtt("potent/B/event", protocol.pack(protocol.event("heat", marker=7, temp_c=51, flame=False)))
             assert srv.mode == "evacuate" and srv.sent[-1] == ("potent/mode", {"mode": "evacuate"})
+            # 연결 끊김: A만 계속 보내고 B는 조용 → ONLINE_SEC 넘으면 화면에 B online false 한 번
+            with c.websocket_connect("/ws") as ws:
+                n = len(srv.snapshot())
+                for _ in range(n):
+                    ws.receive_json()
+                now[0] += ONLINE_SEC + 1
+                srv.on_mqtt("potent/A/state", protocol.pack({"marker": 7, "status": "idle", "battery": 88}))
+                assert ws.receive_json()["robot"] == "A"
+                srv.tick()
+                m = ws.receive_json()
+                assert m["robot"] == "B" and m["online"] is False and m["seen_ago"] > ONLINE_SEC, m
+                srv.tick()                                   # 한 번만 알림
+                srv.on_mqtt("potent/B/state", protocol.pack({"marker": 3, "status": "patrol", "battery": 69}))
+                m = ws.receive_json()
+                assert m["robot"] == "B" and m["online"] is True
             assert ("potent/mode", {"mode": "evacuate"}) in srv.sent
             assert c.get("/status").json()["roles"] == {"A": "A", "B": "B"}
     print("api ok")
