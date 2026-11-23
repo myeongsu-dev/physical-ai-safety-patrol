@@ -34,6 +34,7 @@ class Sonar:
 
 class Cam:
     YELLOW = 4
+    BLACK = 5
     def __init__(self, *a): pass
     def line_follow(self, c): return [80, 70]
     def color_recognition(self): return [1]
@@ -84,6 +85,7 @@ spec = importlib.util.spec_from_file_location("dt", Path(__file__).with_name("ma
 dt = importlib.util.module_from_spec(spec)
 one_loop(lambda: spec.loader.exec_module(dt))
 assert moves[-1] == (0, 0)  # main이 끝나면 멈춤 (Ctrl-C로 끊을 때)
+assert dt.line_color == Cam.BLACK  # 미션맵 선은 검은 테이프
 dt.sys = types.SimpleNamespace(stdin=None, stdout=types.SimpleNamespace(write=lambda s: sent.append(s.rstrip("\n"))))
 
 
