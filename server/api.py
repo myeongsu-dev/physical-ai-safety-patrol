@@ -2,6 +2,7 @@
 셀프 체크(브로커 없이): python -m server.api --selfcheck
 
 MQTT(potent/+/state · event)를 받아 fleet·events에 반영하고 대시보드 WebSocket /ws로 밀어 준다.
+heat 이벤트는 events.HeatCheck로 교차 확인해 출동·대피 명령을 보낸다.
 
 | 경로 | 하는 일 |
 |---|---|
@@ -12,7 +13,7 @@ MQTT(potent/+/state · event)를 받아 fleet·events에 반영하고 대시보�
 | POST /fleet/start | 비어 있는 역할(A·B)을 대기 로봇에게 나눠 주며 출발 |
 | POST /robots/{로봇}/patrol?role=A | 역할을 직접 정해 출발 |
 | POST /robots/{로봇}/cmd | 명령 직접 보내기 (body: {"cmd": "stop"} 등) |
-| POST /mode | {"mode": "normal" · "evacuate"} |
+| POST /mode | {"mode": "normal" · "evacuate"} (normal로 돌리면 교차 확인도 처음부터) |
 | GET /status | 지금 상태 (확인용) |
 | / | dashboard/ 폴더 (index.html이 생기면) |
 """
@@ -21,6 +22,7 @@ import asyncio
 import logging
 import os
 import re
+import threading
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -30,7 +32,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from common import protocol
-from server.events import EventLog
+from server.events import EventLog, HeatCheck
 from server.fleet import Fleet
 
 log = logging.getLogger("server")
@@ -74,6 +76,8 @@ class Server:
     def __init__(self, db_path=":memory:", photo_dir=PHOTO_DIR, mqtt=True, host="localhost", port=1883):
         self.fleet = Fleet()
         self.events = EventLog(str(db_path))
+        self.heat = HeatCheck(self.fleet)
+        self.lock = threading.Lock()   # MQTT 스레드와 1초 tick이 heat를 같이 건드림
         self.hub = Hub()
         self.mode = "normal"
         self.photo_dir = Path(photo_dir)
@@ -130,6 +134,22 @@ class Server:
                 return
             log.info("이벤트 #%s %s %s", e["id"], robot, e["type"])
             self.hub.push(e)
+            if msg["type"] == "heat":
+                with self.lock:
+                    self.apply(self.heat.on_heat(robot, msg))
+
+    def tick(self):
+        """1초마다: 교차 확인 시간 끝난 것 해제"""
+        with self.lock:
+            self.apply(self.heat.tick())
+
+    def apply(self, actions):
+        """HeatCheck가 돌려준 할 일 실행"""
+        for a in actions:
+            if a[0] == "cmd":
+                self.publish(protocol.topic(a[1], "cmd"), a[2])
+            elif a[0] == "mode":
+                self.set_mode(a[1])
 
     # ---------- 화면으로 보낼 것 ----------
     def state_msg(self, robot):
@@ -152,6 +172,8 @@ class Server:
         if mode not in protocol.MODES:
             raise ValueError("모르는 모드: " + str(mode))
         self.mode = mode
+        if mode == "normal":
+            self.heat.reset()
         self.publish(protocol.MODE_TOPIC, {"mode": mode})
         self.hub.push({"kind": "mode", "mode": mode})
 
@@ -161,9 +183,16 @@ def create_app(server):
     async def lifespan(app):
         server.hub.start(asyncio.get_running_loop())
         pump = asyncio.create_task(server.hub.pump())
+
+        async def ticker():
+            while True:
+                await asyncio.sleep(1)
+                server.tick()
+        tick = asyncio.create_task(ticker())
         server.connect()
         yield
         pump.cancel()
+        tick.cancel()
         server.close()
 
     app = FastAPI(title="potent 관제 서버", lifespan=lifespan)
@@ -285,6 +314,14 @@ def selfcheck():
                 assert c.post("/robots/A/cmd", json={"cmd": "guide", "arrow": "left"}).status_code == 200
                 assert c.post("/robots/A/cmd", json={"cmd": "fly"}).status_code == 400
             assert srv.sent[-1] == ("potent/A/cmd", {"cmd": "guide", "arrow": "left"})
+            # 과열 교차 확인: normal로 돌리고, A가 의심 → B 출동 → B도 확인 → 대피
+            c.post("/mode", json={"mode": "normal"})
+            srv.on_mqtt("potent/A/state", protocol.pack({"marker": 7, "status": "heat_check", "battery": 88}))
+            srv.on_mqtt("potent/B/state", protocol.pack({"marker": 3, "status": "patrol", "battery": 70}))
+            srv.on_mqtt("potent/A/event", protocol.pack(protocol.event("heat", marker=7, temp_c=52, flame=True)))
+            assert srv.sent[-2:] == [("potent/A/cmd", {"cmd": "wait"}), ("potent/B/cmd", {"cmd": "go", "zone": 7})]
+            srv.on_mqtt("potent/B/event", protocol.pack(protocol.event("heat", marker=7, temp_c=51, flame=False)))
+            assert srv.mode == "evacuate" and srv.sent[-1] == ("potent/mode", {"mode": "evacuate"})
             assert ("potent/mode", {"mode": "evacuate"}) in srv.sent
             assert c.get("/status").json()["roles"] == {"A": "A", "B": "B"}
     print("api ok")
