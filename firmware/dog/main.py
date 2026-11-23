@@ -60,8 +60,12 @@ def ch_sonar():
 
 
 def ch_line():
+    """선 중심 x (0~159, 가운데 80), 못 찾으면 -1. line_follow는 화면 위 구역·가운데 구역의 7바이트
+    [ID, 중심x, 중심y, 좌상x, 좌상y, 우하x, 우하y] 두 개를 이어서 줌 → 로봇에 가까운 가운데 구역을 먼저 씀"""
     c = cam.line_follow(line_color)
-    return -1 if (c[0] == 0 and c[1] == 0) else c[0]
+    if c[7]:
+        return c[8]
+    return c[1] if c[0] else -1
 
 
 def ev_color():
