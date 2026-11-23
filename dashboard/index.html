@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>안전 순찰 관제</title>
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="evacuate" id="evacuate" hidden>
+  <span>대피 모드: 가까운 비상구로 대피하세요</span>
+  <div class="evacuate-actions" id="evacuate-actions"></div>
+</div>
+
+<header class="bar">
+  <h1>안전 순찰 관제 <span class="view-name" id="view-name" hidden>관리자 화면</span></h1>
+  <div class="conn">
+    <div class="conn-item" id="server">
+      <span class="dot"></span>
+      <span class="label">서버</span>
+      <span class="value">연결 중</span>
+    </div>
+    <div class="conn-item" id="robots">
+      <span class="dot"></span>
+      <span class="label">로봇</span>
+      <span class="value">-</span>
+    </div>
+    <button type="button" class="sound-btn off" id="sound" data-sound="1" hidden>경보음 켜기</button>
+    <div class="clock">
+      <span id="date">-</span>
+      <span id="time">-</span>
+    </div>
+  </div>
+</header>
+
+<div class="notice" id="notice" hidden></div>
+
+<div class="layout">
+  <section class="map-panel" aria-label="미션맵">
+    <h2>미션맵</h2>
+    <div class="map-area">
+      <svg id="map" role="img" aria-label="미션맵: 구역 A1~B2, 순찰 통로, 마커 1~15, 비상구, 충전 스테이션"></svg>
+    </div>
+    <div class="legend" id="legend"></div>
+  </section>
+
+  <section class="panel history-panel" id="history-panel" aria-label="경보 이력" hidden>
+    <h2>경보 이력 <span class="sub">이 화면을 연 뒤에 받은 경보. 새로고침하면 해제된 것은 사라집니다</span></h2>
+    <div class="table-wrap">
+      <table class="history">
+        <thead><tr><th>시각</th><th>종류</th><th>로봇</th><th>경로</th><th>위치</th><th>해제</th><th>사진</th></tr></thead>
+        <tbody id="history"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <aside class="side">
+    <section class="panel status" aria-label="안전 현황">
+      <h2>안전 현황</h2>
+      <div class="status-head">
+        <span class="level" id="level">-</span>
+        <span class="mode">현재 모드 <b id="mode">-</b></span>
+      </div>
+      <dl class="counts">
+        <div><dt>화재·과열</dt><dd class="count" id="count-fire">-</dd></div>
+        <div><dt>통로 차단</dt><dd class="count" id="count-obstacle">-</dd></div>
+        <div><dt>밟힘 주의</dt><dd class="count" id="count-floor">-</dd></div>
+      </dl>
+    </section>
+
+    <section class="panel" aria-label="로봇 현황">
+      <h2>로봇 현황 <span class="sub" id="robot-count"></span></h2>
+      <ul class="robot-cards" id="robot-list"></ul>
+    </section>
+
+    <section class="panel" id="detail-panel" aria-label="경보 상세" hidden>
+      <h2>경보 상세</h2>
+      <div class="detail" id="detail"></div>
+    </section>
+
+    <section class="panel" aria-label="최근 경보">
+      <h2>최근 경보</h2>
+      <ul class="alerts" id="alerts"></ul>
+    </section>
+  </aside>
+</div>
+
+<div class="popup-wrap" id="popup" hidden></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

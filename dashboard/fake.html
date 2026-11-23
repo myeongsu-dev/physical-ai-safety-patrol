@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>가짜 서버 시험</title>
+<style>
+  body { margin: 0; padding: 16px; font: 14px/1.5 system-ui, sans-serif; color: #222; background: #fff; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  h2 { font-size: 15px; margin: 20px 0 8px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  button { font: inherit; padding: 4px 10px; border: 1px solid #999; background: #f4f4f4; border-radius: 4px; cursor: pointer; }
+  button:hover { background: #e8e8e8; }
+  table { border-collapse: collapse; }
+  th, td { border: 1px solid #ccc; padding: 3px 8px; text-align: left; }
+  #log { height: 320px; overflow: auto; border: 1px solid #ccc; padding: 6px; font: 12px/1.4 ui-monospace, monospace; white-space: pre; }
+  #conn { font-weight: 600; }
+  .off { color: #b00; }
+</style>
+</head>
+<body>
+<h1>가짜 서버 시험</h1>
+<p>서버 없이 대시보드가 받을 메시지를 흘려 봅니다. 화면이 받는 메시지를 아래에 그대로 보여 줍니다.</p>
+
+<p>소켓: <span id="conn">-</span></p>
+
+<h2>모드</h2>
+<div class="row">
+  <span>현재: <b id="mode">-</b></span>
+  <button data-act="fire">화재 + 대피</button>
+  <button data-act="normal">대피 해제</button>
+</div>
+
+<h2>경보 보내기</h2>
+<div class="row">
+  <button data-emit="obstacle">통로 차단</button>
+  <button data-emit="floor_object">밟힘 주의</button>
+  <button data-emit="heat">과열</button>
+  <button data-emit="helmet">안전모 미착용</button>
+  <button data-emit="flame">화재</button>
+</div>
+
+<h2>로봇</h2>
+<table>
+  <thead><tr><th>로봇</th><th>연결</th><th>상태</th><th>경로</th><th>마커</th><th>배터리</th></tr></thead>
+  <tbody id="robots"></tbody>
+</table>
+
+<h2>해제 안 된 경보</h2>
+<table>
+  <thead><tr><th>id</th><th>종류</th><th>로봇</th><th>마커</th><th></th></tr></thead>
+  <tbody id="events"></tbody>
+</table>
+
+<h2>받은 메시지 <label><input type="checkbox" id="hideState"> state 숨기기</label></h2>
+<div id="log"></div>
+
+<script type="module">
+import { FakeServer } from "./js/fake.js";
+
+const fake = new FakeServer().start();
+window.fake = fake; // 개발자 도구 콘솔에서 fake.emit("heat", "B") 처럼 쓸 수 있다
+
+const robots = {};
+const events = new Map();
+let mode = "-";
+let sock = null;
+
+function connect() {
+  if (sock) sock.close();
+  setConn("연결 중");
+  sock = fake.socket();
+  sock.onopen = () => setConn("열림");
+  sock.onclose = (ev) => setConn(`닫힘 (code ${ev.code})`, true);
+  sock.onmessage = (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.kind === "state") robots[m.robot] = m;
+    if (m.kind === "mode") mode = m.mode;
+    if (m.kind === "event") m.checked ? events.delete(m.id) : events.set(m.id, m);
+    log(m);
+    render();
+  };
+}
+
+function setConn(text, bad) {
+  const el = document.getElementById("conn");
+  el.textContent = text;
+  el.className = bad ? "off" : "";
+}
+
+function log(m) {
+  if (m.kind === "state" && document.getElementById("hideState").checked) return;
+  const el = document.getElementById("log");
+  const t = new Date().toLocaleTimeString("ko-KR", { hour12: false });
+  el.textContent += `${t} ${JSON.stringify(m)}\n`;
+  if (el.textContent.length > 60000) el.textContent = el.textContent.slice(-40000);
+  el.scrollTop = el.scrollHeight;
+}
+
+function render() {
+  document.getElementById("mode").textContent = mode;
+  document.getElementById("robots").innerHTML = Object.values(robots).map((r) => {
+    return `<tr><td>${r.robot}</td><td>${r.online ? "O" : "X"}</td><td>${r.status}</td>
+      <td>${r.role ?? "-"}</td><td>${r.marker}</td><td>${r.battery}%</td></tr>`;
+  }).join("");
+  document.getElementById("events").innerHTML = [...events.values()].map((e) =>
+    `<tr><td>${e.id}</td><td>${e.type}</td><td>${e.robot}</td><td>${e.marker}</td>
+      <td><button data-check="${e.id}">경보 해제</button></td></tr>`).join("");
+}
+
+document.body.addEventListener("click", async (ev) => {
+  const b = ev.target.closest("button");
+  if (!b) return;
+  const act = b.dataset.act;
+  if (act === "fire") fake.fire();
+  if (act === "normal") await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
+  if (b.dataset.emit) fake.emit(b.dataset.emit);
+  if (b.dataset.check) await fake.fetch(`/events/${b.dataset.check}/check`, { method: "POST" });
+});
+
+connect();
+</script>
+</body>
+</html>
