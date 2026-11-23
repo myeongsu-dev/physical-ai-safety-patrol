@@ -92,6 +92,9 @@ ul { list-style: none; margin: 0; padding: 0; }
 }
 .ok > .dot { background: var(--ok); }
 .bad > .dot { background: var(--bad); }
+/* 로봇 현황 카드는 점이 카드(li) 안쪽 줄에 있다 */
+.robot-cards li.ok .dot { background: var(--ok); }
+.robot-cards li.bad .dot { background: var(--bad); }
 
 /* ---------- 끊김 알림 줄 ---------- */
 .notice {
