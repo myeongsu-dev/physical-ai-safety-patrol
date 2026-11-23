@@ -73,6 +73,15 @@ export function safetySummary(store, now = Date.now()) {
   return { level, mode: store.mode, counts, offline };
 }
 
+// 최근 경보: 처리 완료 안 된 경보, 새것부터.
+// 안전모 미착용은 화면에 보여 줄지 미정이라 뺀다 (safetySummary와 같은 기준)
+export function openAlerts(store, limit = 5) {
+  return [...store.events.values()]
+    .filter((e) => e.type !== "helmet")
+    .sort((a, b) => b.id - a.id)
+    .slice(0, limit);
+}
+
 // 화면에 보여 줄 로봇 연결 요약
 export function connectionSummary(store, now = Date.now()) {
   const names = [...new Set([...ROBOTS, ...Object.keys(store.robots)])];

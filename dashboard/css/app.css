@@ -1,5 +1,6 @@
 :root {
-  --bg: #ffffff;
+  --bg: #f4f5f7;
+  --panel: #ffffff;
   --text: #1a1a1a;
   --muted: #666666;
   --line: #dddddd;
@@ -23,9 +24,21 @@ body {
 
 h1, h2 { margin: 0; font-weight: 600; }
 h1 { font-size: 18px; }
-h2 { font-size: 15px; margin-bottom: var(--gap); }
+h2 { font-size: 15px; margin-bottom: calc(var(--gap) * 1.5); }
+h2 .sub { color: var(--muted); font-weight: 400; }
+ul { list-style: none; margin: 0; padding: 0; }
 
-/* ---------- 위 막대: 제목과 연결 상태 ---------- */
+/* ---------- 대피 모드: 화면 맨 위에 크게 ---------- */
+.evacuate {
+  padding: calc(var(--gap) * 2);
+  background: var(--bad);
+  color: #ffffff;
+  font-size: 24px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* ---------- 위 막대: 제목, 연결 상태, 시각 ---------- */
 .bar {
   display: flex;
   flex-wrap: wrap;
@@ -33,16 +46,20 @@ h2 { font-size: 15px; margin-bottom: var(--gap); }
   justify-content: space-between;
   gap: calc(var(--gap) * 2);
   padding: calc(var(--gap) * 1.5) calc(var(--gap) * 2);
+  background: var(--panel);
   border-bottom: 1px solid var(--line);
 }
 
-.conn { display: flex; flex-wrap: wrap; gap: calc(var(--gap) * 3); }
+.conn { display: flex; flex-wrap: wrap; align-items: center; gap: calc(var(--gap) * 3); }
 .conn-item { display: flex; align-items: center; gap: 6px; }
 .conn-item .label { color: var(--muted); }
 .conn-item .value { font-variant-numeric: tabular-nums; }
 .conn-item.bad .value { color: var(--bad); font-weight: 600; }
+.clock { display: flex; gap: var(--gap); color: var(--muted); font-variant-numeric: tabular-nums; }
+.clock #time { color: var(--text); font-weight: 600; }
 
 .dot {
+  flex: none;
   width: 10px;
   height: 10px;
   border-radius: 50%;
@@ -60,54 +77,117 @@ h2 { font-size: 15px; margin-bottom: var(--gap); }
   font-weight: 600;
 }
 
-/* ---------- 대피 모드: 화면 맨 위에 크게 ---------- */
-.evacuate {
+/* ---------- 3단 틀: 가운데 지도, 오른쪽 칸 ---------- */
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: calc(var(--gap) * 2);
   padding: calc(var(--gap) * 2);
-  background: var(--bad);
-  color: #ffffff;
-  font-size: 24px;
-  font-weight: 700;
-  text-align: center;
+}
+.side { display: flex; flex-direction: column; gap: calc(var(--gap) * 2); }
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: calc(var(--gap) * 2);
 }
 
-main { padding: calc(var(--gap) * 2); }
-
-/* ---------- 현재 모드, 안전 현황, 건수 ---------- */
-.status { margin-bottom: calc(var(--gap) * 3); }
-.status dl {
+/* 지도 패널은 계획 페이지의 관제 지도처럼 어두운 화면 */
+.map-panel {
+  display: flex;
+  flex-direction: column;
+  align-self: start;
+  background: #08111f;
+  color: #dbe7f5;
+  border: 1px solid #1f3350;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.map-panel h2 {
+  margin: 0;
+  padding: calc(var(--gap) * 1.5) calc(var(--gap) * 2);
+  background: #0d1a2c;
+  border-bottom: 1px solid #1f3350;
+}
+.map-area { padding: var(--gap); }
+.map-area svg { display: block; width: 100%; height: auto; }
+.legend {
   display: flex;
   flex-wrap: wrap;
-  gap: calc(var(--gap) * 2) calc(var(--gap) * 5);
-  margin: 0;
+  gap: var(--gap) calc(var(--gap) * 3);
+  padding: calc(var(--gap) * 1.5) calc(var(--gap) * 2);
+  border-top: 1px solid #1f3350;
+  font-size: 13px;
+  color: #8aa0b9;
 }
-.status dt { color: var(--muted); font-size: 13px; }
-.status dd { margin: 2px 0 0; font-size: 20px; font-weight: 600; }
-.status .count { font-variant-numeric: tabular-nums; }
-.status .count.has { color: var(--bad); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.legend svg { flex: none; }
+
+@media (max-width: 900px) {
+  .layout { grid-template-columns: 1fr; }
+}
+
+/* ---------- 안전 현황 ---------- */
+.status-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  margin-bottom: calc(var(--gap) * 1.5);
+}
+.status-head .mode { color: var(--muted); }
+.status-head .mode b { color: var(--text); }
 #mode.evacuate-text { color: var(--bad); }
 
 .level {
   display: inline-block;
-  padding: 0 10px;
+  padding: 2px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  font-size: 22px;
+  font-weight: 700;
 }
 .level.safe { color: var(--ok); border-color: var(--ok); }
 .level.caution { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
 .level.fire { color: #ffffff; border-color: var(--bad); background: var(--bad); }
 .level.unknown { color: var(--muted); }
 
-/* ---------- 로봇 연결 목록 ---------- */
-.robot-list ul { list-style: none; margin: 0; padding: 0; max-width: 480px; }
-.robot-list li {
+.counts { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--gap); margin: 0; }
+.counts dt { color: var(--muted); font-size: 13px; }
+.counts dd { margin: 0; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.counts .count.has { color: var(--bad); }
+
+/* ---------- 로봇 현황 ---------- */
+.robot-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+.robot-cards li {
+  padding: var(--gap) calc(var(--gap) * 1.5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.robot-cards li.bad { border-color: var(--bad); background: var(--bad-bg); }
+.robot-cards .top { display: flex; align-items: center; gap: 6px; margin-bottom: 2px; }
+.robot-cards .name { font-weight: 600; }
+.robot-cards .conn-text { margin-left: auto; font-size: 13px; color: var(--muted); }
+.robot-cards li.bad .conn-text { color: var(--bad); font-weight: 600; }
+.robot-cards .state { font-size: 14px; }
+.robot-cards .meta { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.robot-cards .battery.low { color: var(--warn); font-weight: 600; }
+.robot-cards .battery.empty { color: var(--bad); font-weight: 600; }
+
+/* ---------- 최근 경보 ---------- */
+.alerts li {
   display: grid;
-  grid-template-columns: 16px 3em 1fr auto;
-  align-items: center;
-  gap: var(--gap);
+  grid-template-columns: 1fr auto;
+  gap: 0 var(--gap);
   padding: var(--gap) 0;
   border-bottom: 1px solid var(--line);
 }
-.robot-list .name { font-weight: 600; }
-.robot-list .state { color: var(--muted); }
-.robot-list .bad .state { color: var(--bad); font-weight: 600; }
-.robot-list .seen { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.alerts li:last-child { border-bottom: 0; }
+.alerts .type { font-weight: 600; }
+.alerts .type.fire { color: var(--bad); }
+.alerts .type.warn { color: var(--warn); }
+.alerts .where { grid-column: 1; font-size: 13px; color: var(--muted); }
+.alerts .at { grid-row: 1; grid-column: 2; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.alerts .empty { color: var(--muted); }

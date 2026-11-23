@@ -22,42 +22,49 @@
       <span class="label">로봇</span>
       <span class="value">-</span>
     </div>
+    <div class="clock">
+      <span id="date">-</span>
+      <span id="time">-</span>
+    </div>
   </div>
 </header>
 
 <div class="notice" id="notice" hidden></div>
 
-<main>
-  <section class="status" aria-label="현재 상황">
-    <dl>
-      <div>
-        <dt>현재 모드</dt>
-        <dd id="mode">-</dd>
-      </div>
-      <div>
-        <dt>안전 현황</dt>
-        <dd><span class="level" id="level">-</span></dd>
-      </div>
-      <div>
-        <dt>화재·과열</dt>
-        <dd class="count" id="count-fire">-</dd>
-      </div>
-      <div>
-        <dt>통로 차단</dt>
-        <dd class="count" id="count-obstacle">-</dd>
-      </div>
-      <div>
-        <dt>밟힘 주의</dt>
-        <dd class="count" id="count-floor">-</dd>
-      </div>
-    </dl>
+<div class="layout">
+  <section class="map-panel" aria-label="미션맵">
+    <h2>미션맵</h2>
+    <div class="map-area">
+      <svg id="map" role="img" aria-label="미션맵: 구역 A1~B2, 순찰 통로, 마커 1~15, 비상구, 충전 스테이션"></svg>
+    </div>
+    <div class="legend" id="legend"></div>
   </section>
 
-  <section class="robot-list" aria-label="로봇 연결">
-    <h2>로봇 연결</h2>
-    <ul id="robot-list"></ul>
-  </section>
-</main>
+  <aside class="side">
+    <section class="panel status" aria-label="안전 현황">
+      <h2>안전 현황</h2>
+      <div class="status-head">
+        <span class="level" id="level">-</span>
+        <span class="mode">현재 모드 <b id="mode">-</b></span>
+      </div>
+      <dl class="counts">
+        <div><dt>화재·과열</dt><dd class="count" id="count-fire">-</dd></div>
+        <div><dt>통로 차단</dt><dd class="count" id="count-obstacle">-</dd></div>
+        <div><dt>밟힘 주의</dt><dd class="count" id="count-floor">-</dd></div>
+      </dl>
+    </section>
+
+    <section class="panel" aria-label="로봇 현황">
+      <h2>로봇 현황 <span class="sub" id="robot-count"></span></h2>
+      <ul class="robot-cards" id="robot-list"></ul>
+    </section>
+
+    <section class="panel" aria-label="최근 경보">
+      <h2>최근 경보</h2>
+      <ul class="alerts" id="alerts"></ul>
+    </section>
+  </aside>
+</div>
 
 <script type="module" src="js/app.js"></script>
 </body>

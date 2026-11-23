@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN } from "./js/mapdata.js";
 import { FakeServer, EVENT_TYPES } from "./js/fake.js";
-import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, ONLINE_SEC } from "./js/store.js";
+import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, ONLINE_SEC } from "./js/store.js";
 
 // ---------- 1) 지도 데이터 ----------
 function readMapConfig() {
@@ -198,6 +198,13 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
   assert.equal(safetySummary(st, T + 6000).level, "fire");
   apply(st, { kind: "mode", mode: "normal" });
 
+  // 최근 경보: 처리 완료 안 된 것만, 새것부터, 안전모 미착용 뺌
+  apply(st, { kind: "event", id: 6, type: "obstacle", checked: false });
+  apply(st, { kind: "event", id: 7, type: "heat", checked: false });
+  assert.deepEqual(openAlerts(st).map((e) => e.id), [7, 6]);
+  for (let id = 10; id < 20; id++) apply(st, { kind: "event", id, type: "obstacle", checked: false });
+  assert.equal(openAlerts(st).length, 5);
+
   // 서버가 끊기면 확인 불가
   setServer(st, "closed", T + 7000);
   assert.equal(safetySummary(st, T + 7000).level, "unknown");
@@ -211,6 +218,7 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
     (els[id] ??= {
       id, className: "", textContent: "", innerHTML: "", hidden: false,
       querySelector(sel) { return el(id + " " + sel); },
+      setAttribute(k, v) { this[k] = v; },
     });
   const timers = [];
   globalThis.document = { getElementById: el };
@@ -231,6 +239,17 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
   assert.equal(el("evacuate").hidden, false);
   assert.equal(el("level").textContent, "화재");
   assert.equal(el("count-fire").textContent, "1건");
+  assert.match(el("alerts").innerHTML, /화재/);
+  globalThis.fake.tick(); // 로봇 상태는 다음 state(1초 뒤)에 바뀌어 온다
+  assert.match(el("robot-list").innerHTML, /대피 안내/);
+  // 지도: 마커 15개, 구역 5개, 경보·로봇 표시는 없음
+  const svg = el("map").innerHTML;
+  assert.equal(el("map").viewBox, "40 40 1920 1330");
+  for (let n = 1; n <= 15; n++) assert.ok(svg.includes(`>${n}</text>`), `지도에 마커 ${n} 없음`);
+  for (const z of ["A1", "A2", "A3", "B1", "B2"]) assert.ok(svg.includes(`>${z}</text>`), `지도에 구역 ${z} 없음`);
+  assert.ok(svg.includes("비상구 1") && svg.includes("비상구 2") && svg.includes("충전 스테이션"));
+  assert.ok(!/화재|통로 차단|밟힘/.test(svg));
+  assert.match(el("time").textContent, /^\d\d:\d\d:\d\d$/);
   globalThis.fake.stop();
   timers.forEach(clearInterval);
   globalThis.setInterval = realSetInterval;
