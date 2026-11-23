@@ -255,6 +255,74 @@ ul { list-style: none; margin: 0; padding: 0; }
 .confirm-text { margin: 0 0 var(--gap); color: var(--bad); font-weight: 600; }
 .error { margin: var(--gap) 0 0; color: var(--bad); font-size: 13px; }
 
+/* ---------- 경보음 켜기 (관리자 화면) ---------- */
+.sound-btn {
+  font: inherit;
+  font-size: 14px;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.sound-btn.off { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); font-weight: 600; }
+.sound-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+/* ---------- 깜빡임: 과열, 밟힘 주의 (눌러서 볼 때까지) ---------- */
+@keyframes blink { 50% { background: var(--warn-bg); } }
+.alerts li.blink .alert-btn { animation: blink 1s step-end infinite; box-shadow: inset 3px 0 0 var(--warn); }
+@media (prefers-reduced-motion: reduce) {
+  .alerts li.blink .alert-btn { animation: none; background: var(--warn-bg); }
+}
+
+/* ---------- 경보 팝업: 화재, 통로 차단 ---------- */
+.popup-wrap {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.popup-wrap[hidden] { display: none; }
+.popup {
+  width: min(720px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  padding: calc(var(--gap) * 2);
+  background: var(--panel);
+  border-top: 6px solid var(--warn);
+  border-radius: var(--radius);
+}
+.popup.fire { border-top-color: var(--bad); }
+.popup-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--gap); margin-bottom: calc(var(--gap) * 1.5); }
+.popup-head h2 { margin: 0; font-size: 22px; }
+.popup.fire .popup-head h2 { color: var(--bad); }
+.popup.warn .popup-head h2 { color: var(--warn); }
+.popup-body { display: grid; grid-template-columns: 1fr 1fr; gap: calc(var(--gap) * 1.5); margin-bottom: calc(var(--gap) * 1.5); }
+.popup-body .photo { margin: 0; }
+.mini-map { display: block; width: 100%; height: auto; border-radius: var(--radius); }
+.popup-where { margin: var(--gap) 0 0; font-weight: 600; }
+.popup button {
+  font: inherit;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.popup .check { width: 100%; border: 1px solid var(--text); background: var(--text); color: #ffffff; font-weight: 600; }
+.popup .check.danger { border-color: var(--bad); background: var(--bad); }
+.popup .check:disabled { opacity: 0.6; cursor: default; }
+.popup .cancel { border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+.popup .actions { display: grid; grid-template-columns: 2fr 1fr; gap: var(--gap); }
+.popup-close { width: 100%; margin-top: var(--gap); border: 1px solid var(--line); background: var(--panel); color: var(--muted); }
+.popup button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+@media (max-width: 600px) {
+  .popup-body { grid-template-columns: 1fr; }
+}
+
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); margin: calc(var(--gap) * 1.5) 0 0; }
 .fields dt { color: var(--muted); font-size: 13px; }
 .fields dd { margin: 0; font-variant-numeric: tabular-nums; }

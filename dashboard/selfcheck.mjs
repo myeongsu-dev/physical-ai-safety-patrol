@@ -368,4 +368,101 @@ async function bootApp(search, tag) {
   app.stop();
 }
 
+// ---------- 7) 경보음 ----------
+// 소리를 내는 대신 삐 소리를 몇 번 냈는지 센다
+let beeps = 0;
+class FakeAudioContext {
+  currentTime = 0;
+  destination = {};
+  resume() {}
+  createOscillator() {
+    return { frequency: {}, connect() {}, start() { beeps += 1; }, stop() {} };
+  }
+  createGain() {
+    return { gain: {}, connect() {} };
+  }
+}
+{
+  const { createAlarm } = await import("./js/sound.js");
+  const a = createAlarm(FakeAudioContext);
+  assert.equal(a.play("flame"), 0); // 켜기 전에는 소리 안 남
+  assert.ok(await a.enable());
+  assert.equal(a.play("flame"), 3);
+  assert.equal(a.play("obstacle"), 2);
+  assert.equal(a.play("heat"), 1);
+  a.disable();
+  assert.equal(a.play("flame"), 0);
+  assert.equal(createAlarm(undefined).supported, false);
+}
+
+// ---------- 8) 관리자 화면: 경보 팝업, 깜빡임, 경보음 ----------
+{
+  globalThis.AudioContext = FakeAudioContext;
+  const app = await bootApp("?fake&admin", "popup");
+  const { el, fake } = app;
+  await tickWait(550); // 화면을 연 직후의 첫 묶음 시간이 지나야 새 경보로 친다
+
+  // 경보음 켜기 버튼
+  assert.equal(el("sound").textContent, "경보음 켜기");
+  await app.click({ sound: "1" });
+  assert.equal(el("sound").textContent, "경보음 끄기");
+  beeps = 0;
+
+  // 통로 차단 → 팝업 + 경보음 2번
+  const ob = fake.emit("obstacle", "A");
+  await tickWait();
+  assert.equal(el("popup").hidden, false);
+  assert.match(el("popup").innerHTML, /통로 차단 경보/);
+  assert.match(el("popup").innerHTML, /mini-map/);
+  assert.match(el("popup").innerHTML, /stroke="#ff4d4d"/); // 작은 지도에 위치 표시
+  assert.match(el("popup").innerHTML, new RegExp(`data-check="${ob.id}"`));
+  assert.equal(beeps, 2);
+
+  // 과열 → 팝업 없이 깜빡임 + 경보음 1번. 팝업은 통로 차단 그대로
+  const heat = fake.emit("heat", "B");
+  await tickWait();
+  assert.equal(beeps, 3);
+  assert.match(el("popup").innerHTML, /통로 차단 경보/);
+  assert.match(el("alerts").innerHTML, new RegExp(`class="[^"]*blink[^"]*"><button type="button" class="alert-btn" data-alert="${heat.id}"`));
+
+  // 팝업 닫기 → 오른쪽 경보 상세에 그 경보
+  await app.click({ popupClose: "1" });
+  assert.equal(el("popup").hidden, true);
+  assert.match(el("detail").innerHTML, new RegExp(`data-check="${ob.id}"`));
+
+  // 과열을 눌러 보면 깜빡임이 멈춘다
+  await app.click({ alert: String(heat.id) });
+  assert.ok(!el("alerts").innerHTML.includes("blink"));
+
+  // 화재 → 팝업 + 경보음 3번. 팝업에서 한 번 더 확인하고 처리 완료하면 팝업이 닫힌다
+  const fire = fake.emit("flame", "C");
+  await tickWait();
+  assert.equal(beeps, 6);
+  assert.match(el("popup").innerHTML, /화재 경보/);
+  await app.click({ check: String(fire.id) });
+  assert.match(el("popup").innerHTML, /대피 모드는 따로 해제/);
+  await app.click({ check: String(fire.id), sure: "1" });
+  await tickWait();
+  assert.equal(fake.events.find((e) => e.id === fire.id).checked, true);
+  assert.equal(el("popup").hidden, true);
+
+  // 팝업이 여러 개면 차례로
+  fake.emit("obstacle", "A");
+  fake.emit("flame", "B");
+  await tickWait();
+  assert.match(el("popup").innerHTML, /대기 중인 팝업 1건/);
+  await app.click({ popupClose: "1" });
+  assert.match(el("popup").innerHTML, /화재 경보/);
+
+  // 경보음 끄기 → 소리 안 남
+  await app.click({ sound: "1" });
+  beeps = 0;
+  fake.emit("obstacle", "D");
+  await tickWait();
+  assert.equal(beeps, 0);
+
+  app.stop();
+  delete globalThis.AudioContext;
+}
+
 console.log("dashboard selfcheck OK");
