@@ -30,7 +30,8 @@ cam = optional(lambda: Hiwonder_IIC.ESP32S3Cam(Hiwonder_IIC.IIC(2)))
 tube = optional(Hiwonder.Digitaltube)
 # shortcut: MP3 클래스 이름·주소(포트 2, 0x7B)는 실기 확인 전 추정. 없으면 A 명령이 "MP3 없음"으로 답한다
 mp3 = optional(lambda: Hiwonder_IIC.MP3(Hiwonder_IIC.IIC(2)))
-line_color = getattr(cam, "YELLOW", 0) if cam else 0
+# 미션맵 선은 검은 테이프. 비전 모듈 공장 펌웨어에는 검정 기준값이 없어 5번 칸에 넣고 다시 구워야 한다 (README)
+line_color = getattr(cam, "BLACK", 0) if cam else 0
 
 # 지금 하고 있는 일: until(이동 끝 시각), mode(None/move/follow/guard), 스트림 주기·채널, rx(Pi에게서 마지막으로 받은 시각)
 st = {"until": None, "mode": None, "args": None, "period": 0, "chans": [], "events": [], "t0": 0, "last": {}, "guard": None,
