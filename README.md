@@ -41,7 +41,8 @@ physical-ai-safety-patrol/
 ├── ml/helmet/ · flame/  데이터·라벨·학습 (데이터는 커밋 안 함)
 ├── models/              Pi에 배포할 변환된 모델 (버전 폴더)
 ├── tools/mechdog-test/  MechDog 동작 시험 도구 (웹 블루투스)
-└── tools/pi-power-test/ Pi 5 보조배터리 시험 (판정 · 사용 시간)
+├── tools/pi-power-test/ Pi 5 보조배터리 시험 (판정 · 사용 시간)
+└── tools/integration-test/ 통합 시나리오 시험 (서버 PC에서, dev → main 기준)
 ```
 
 각 폴더의 README에 맡은 일, 입출력, 실행 방법이 있습니다.
@@ -77,6 +78,7 @@ git push -u origin edge/thermo             # 3. GitHub에서 dev로 PR
 - PR은 한 기능씩 작게 올리고, 다른 한 명이 보고 merge합니다. 자기 폴더 안의 작은 수정은 본인이 merge해도 됩니다.
 - 작업이 길어지면 중간에 `git pull origin dev`로 dev를 받아 충돌을 일찍 풉니다.
 - `dev`에서 여러 파트가 맞물려 동작하는 것을 확인하면 `dev` → `main` PR을 올립니다. 멘토링·시연 전에 한 번씩 합니다.
+- `dev` → `main` PR에는 그때 정한 통합 시나리오(`tools/integration-test/`)가 전부 PASS인 결과표를 붙입니다.
 
 ## CI (자동 검사)
 
