@@ -82,18 +82,21 @@ def c_dog(a):
     if not link:
         return 1
     st = BoardState(config.STREAM_CHANS)
-    n = {"D": 0}
+    n = {"D": 0, "echo": 0}
 
     def show(parts):
         n["D"] += parts[0] == "D"
+        n["echo"] += len(parts) == 1 or "$CMD" in "|".join(parts)   # CMD|V|$ → ["V"] 같은 에코
         if parts[0] != "D" or n["D"] % 5 == 1:   # 측정값은 5줄에 한 줄만
             print("  <", "|".join(parts))
 
     ok = True
     link.send("V")
-    v = _read(link, st, 2.0, show, lambda p: p[0] == "V")
-    ok &= _verdict(v is not None, f"V 응답: 버전 {st.version}, 명령 {st.commands}, 숫자 채널 {st.board_chans}, "
+    v = _read(link, st, 2.0, show, lambda p: p[0] == "V" and len(p) >= 2)   # 보낸 줄이 그대로 돌아온 "V"(REPL 에코)는 답이 아님
+    ok &= _verdict(v is not None and st.version is not None, f"V 응답: 버전 {st.version}, 명령 {st.commands}, 숫자 채널 {st.board_chans}, "
                                   f"이벤트 {sorted(st.event_chans)}")
+    if v is None and n["echo"]:
+        print("      보낸 줄이 그대로 돌아옴 → 보드가 MicroPython REPL(>>>)에 있고 main.py가 안 돎. firmware/dog/README.md로 main.py 올리기")
     if v and st.commands is not None:
         ok &= _verdict("F" in st.commands and "S" in st.commands, "F·S 지원")
         ok &= _verdict("line" in (st.board_chans or []), "line 채널 (보드가 바닥 비전 모듈을 찾음)")
