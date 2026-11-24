@@ -106,6 +106,13 @@ function renderSafety(serverOpen, now) {
   }
 }
 
+// 관리자 화면 카드 맨 아래: 로봇 Pi가 돌리는 프로그램의 git 커밋 (state의 version).
+// 끊긴 로봇은 마지막으로 받은 값을 그대로 보여 준다
+function versionLine(msg) {
+  if (!admin || !msg || !msg.version) return "";
+  return `<div class="version">버전 ${esc(msg.version)}</div>`;
+}
+
 // 로봇 현황 카드
 function renderRobots(s, serverOpen, now) {
   document.getElementById("robot-count").textContent = `(${s.total}대)`;
@@ -129,10 +136,11 @@ function renderRobots(s, serverOpen, now) {
         meta.push(`<span class="battery ${bcls}">배터리 ${esc(b)}%</span>`);
       }
       if (serverOpen && !r.online) {
-        if (r.lastSeen) meta.push(`마지막 수신 ${ago(r.lastSeen, now)} 전`);
-        else if (!r.known) meta.push("수신 기록 없음");
+        // 항목마다 span: 카드가 좁으면 "·" 사이에서만 줄이 바뀐다 (css .meta > span)
+        if (r.lastSeen) meta.push(`<span>마지막 수신 ${ago(r.lastSeen, now)} 전</span>`);
+        else if (!r.known) meta.push("<span>수신 기록 없음</span>");
         // 화면을 열 때 서버가 이미 끊긴 로봇이라고 알려 준 경우. 서버가 마지막 수신 시각은 보내지 않는다
-        else meta.push("화면을 열기 전부터 끊김");
+        else meta.push("<span>화면을 열기 전부터 끊김</span>");
       }
 
       return `<li class="${cls}">
@@ -140,6 +148,7 @@ function renderRobots(s, serverOpen, now) {
           <span class="state">${esc(state)}</span></div>
         <div class="place">${esc(robotPlace(msg))}</div>
         <div class="meta">${meta.join(" · ")}</div>
+        ${versionLine(msg)}
       </li>`;
     })
     .join("");
@@ -208,14 +217,15 @@ function renderHistory(shown) {
 function historyRow(h, selected) {
   const e = h.event;
   const [label, cls] = ALERT_TEXT[e.type] ?? [e.type, ""];
-  const state = h.checkedAt ? `경보 해제 ${clock(h.checkedAt)}` : "해제 전";
+  // 좁은 화면에서는 "경보 해제"와 시각 사이에서만 줄이 바뀐다
+  const state = h.checkedAt ? `<span>경보 해제</span> <span>${clock(h.checkedAt)}</span>` : "해제 전";
   return `<tr class="${selected ? "selected" : ""}">
     <td><button type="button" class="row-btn" data-alert="${e.id}" aria-pressed="${selected}">${e.ts ? clock(e.ts * 1000) : "-"}</button></td>
     <td class="type ${cls}">${esc(label)}</td>
     <td>${esc(robotLabel(e.robot))}</td>
     <td>${h.role ? `${esc(h.role)} 경로` : "-"}</td>
     <td>${e.marker != null ? `마커 ${esc(e.marker)}` : "-"}</td>
-    <td class="${h.checkedAt ? "done" : "open"}">${state}</td>
+    <td class="state ${h.checkedAt ? "done" : "open"}">${state}</td>
     <td>${e.photo
       ? `<a class="photo-btn" href="${esc(e.photo)}" data-photo="${esc(e.photo)}">사진 보기</a>`
       : `<span class="no-photo">사진 없음</span>`}</td>
@@ -417,10 +427,11 @@ function renderPopup() {
     </div>
     ${actionHtml(e)}
     ${errorHtml(e)}
-    <button type="button" class="popup-close" data-popup-close="1">닫기 (오른쪽 경보 상세에서 다시 볼 수 있음)</button>
+    <button type="button" class="popup-close" data-popup-close="1">닫기 (경보 상세에서 다시 볼 수 있음)</button>
   </div>`;
   wrap.hidden = false;
-  wrap.querySelector?.(".check:not([disabled])")?.focus?.();
+  // 좁은 화면에서 팝업이 버튼 쪽으로 내려가 제목·사진이 가려지지 않게, 초점만 주고 스크롤은 하지 않는다
+  wrap.querySelector?.(".check:not([disabled])")?.focus?.({ preventScroll: true });
 }
 
 // 화재 팝업이 떠 있는 동안 경보음을 반복한다

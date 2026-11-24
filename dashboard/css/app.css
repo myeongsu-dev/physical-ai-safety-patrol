@@ -109,6 +109,8 @@ ul { list-style: none; margin: 0; padding: 0; }
 .layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
+  /* 오른쪽 칸이 지도보다 길면 남는 높이는 둘째 줄(경보 이력)이 받는다. 지도와 경보 이력 사이가 벌어지지 않게 */
+  grid-template-rows: auto 1fr;
   gap: calc(var(--gap) * 2);
   padding: calc(var(--gap) * 2);
 }
@@ -154,10 +156,13 @@ ul { list-style: none; margin: 0; padding: 0; }
 .legend svg { flex: none; }
 
 /* 경보 이력은 지도 아래 (왼쪽 칸) */
-.history-panel { grid-column: 1; }
+.history-panel { grid-column: 1; align-self: start; }
 .table-wrap { overflow-x: auto; }
-.history { width: 100%; min-width: 520px; border-collapse: collapse; font-size: 14px; }
-.history th, .history td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.history { width: 100%; min-width: 440px; border-collapse: collapse; font-size: 14px; }
+.history th, .history td { padding: 6px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+/* 해제 칸은 "경보 해제"와 시각 사이에서 줄이 바뀔 수 있다 */
+.history td.state { white-space: normal; }
+.history td.state span { white-space: nowrap; }
 .history th { color: var(--muted); font-weight: 500; font-size: 13px; }
 .history tr.selected td { background: var(--bg); }
 .history .type { font-weight: 600; }
@@ -192,9 +197,12 @@ ul { list-style: none; margin: 0; padding: 0; }
 .done-text { margin: 0; padding: 8px 14px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); text-align: center; }
 
 @media (max-width: 900px) {
-  .layout { grid-template-columns: 1fr; }
+  /* minmax(0, …): 경보 이력 표의 최소 폭 때문에 화면 전체가 옆으로 밀리지 않게. 표는 자기 칸 안에서 옆으로 넘긴다 */
+  .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; }
   .history-panel { grid-column: auto; }
-  .side { grid-column: auto; grid-row: auto; }
+  /* 한 줄로 쌓일 때는 안전 현황을 맨 위(지도 위)로. 오른쪽 칸 틀을 풀어 칸마다 순서를 정한다 */
+  .side { display: contents; }
+  .side > .status { order: -1; }
 }
 
 /* ---------- 안전 현황 ---------- */
@@ -242,6 +250,8 @@ ul { list-style: none; margin: 0; padding: 0; }
 .robot-cards li.bad .state { color: var(--bad); font-weight: 600; }
 .robot-cards .place { font-size: 14px; }
 .robot-cards .meta { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.robot-cards .meta > span { white-space: nowrap; }
+.robot-cards .version { margin-top: 2px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .robot-cards .battery.low { color: var(--warn); font-weight: 600; }
 .robot-cards .battery.empty { color: var(--bad); font-weight: 600; }
 

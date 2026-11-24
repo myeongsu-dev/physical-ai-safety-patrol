@@ -315,6 +315,7 @@ async function bootApp(search, tag) {
   assert.match(el("robot-list").innerHTML, /대피 안내/);
   assert.match(el("robot-list").innerHTML, /충전 스테이션/); // C·D는 충전 스테이션에서 대기
   assert.equal(el("map .robots").innerHTML, ""); // 기본 화면에는 로봇 위치 없음
+  assert.doesNotMatch(el("robot-list").innerHTML, /class="version"/); // 버전은 관리자 화면에만
   // 지도: 마커 15개, 구역 5개, 경보·로봇 표시는 없음
   const svg = el("map").innerHTML;
   assert.equal(el("map").viewBox, "40 40 1920 1330");
@@ -336,6 +337,8 @@ async function bootApp(search, tag) {
   const { el, fake } = app;
   assert.equal(el("detail-panel").hidden, false);
   assert.match(el("detail").innerHTML, /남은 경보가 없습니다/);
+  // 로봇 카드 맨 아래 프로그램 버전 (가짜 로봇은 "fake")
+  assert.equal((el("robot-list").innerHTML.match(/<div class="version">버전 fake<\/div>/g) || []).length, 4);
 
   // 경보가 오면 가장 새 경보가 상세에 뜬다
   const ob = fake.emit("obstacle", "A");
@@ -533,7 +536,7 @@ class FakeAudioContext {
   await app.click({ check: String(fire.id) });
   await app.click({ check: String(fire.id), sure: "1" });
   await tickWait();
-  assert.match(el("history").innerHTML, /경보 해제 \d\d:\d\d:\d\d/);
+  assert.match(el("history").innerHTML, /<span>경보 해제<\/span> <span>\d\d:\d\d:\d\d<\/span>/);
   assert.ok(!el("alerts").innerHTML.includes(`data-alert="${fire.id}"`)); // 최근 경보에서는 빠짐
   await app.click({ alert: String(fire.id) });
   const d = el("detail").innerHTML;

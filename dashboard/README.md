@@ -101,7 +101,7 @@
 | 경보 해제 | 넣음 | `POST /events/{id}/check` |
 | 대피 해제 | 넣음. 누르기 전에 한 번 더 확인 | `POST /mode` `{"mode": "normal"}` |
 | 출발 | 미정 (사람이 누를지, 서버가 알아서 내보낼지) | `POST /fleet/start`, `POST /robots/{로봇}/patrol?role=A` |
-| 교차 확인 요청 | 미정 | `POST /robots/{로봇}/cmd` |
+| 교차 확인 요청 | 넣지 않음. 교차 확인 명령은 서버가 내림 | |
 
 ## 서버와 주고받기
 
@@ -121,6 +121,8 @@
   - 진짜 서버는 끊긴 로봇의 state를 더 보내지 않습니다. 로봇 연결 끊김은 화면이 마지막 state를 받은 시각으로 판단해야 합니다
 - 셀프 체크: `node dashboard/selfcheck.mjs`. 지도 데이터 [js/mapdata.js](js/mapdata.js)가 `server/map_config.py`와 같은지, 가짜 서버가 진짜 서버와 같은 순서·모양으로 보내는지 봅니다. CI가 `check.sh`로 돌립니다
 - 서버와 같이: `python -m server.fake_robots`와 `python -m server.api`를 켜고 브라우저로 엽니다
+  - 노트북의 Mosquitto(포트 1883)가 켜져 있어야 합니다
+  - 저장소 루트 `.env`에 현장 브로커 주소(`MQTT_HOST=192.168.0.10` 등)가 있으면 서버는 그쪽으로 붙고, 가짜 로봇은 `localhost`로 붙어서 서로 못 만납니다. 화면에 로봇이 전부 "수신 기록 없음"으로 나옵니다. 가짜 로봇과 시험할 때는 `MQTT_HOST=localhost python -m server.api`로 켭니다 (PowerShell은 `$env:MQTT_HOST="localhost"; python -m server.api`)
 - 브라우저는 화면을 한 번 누르기 전에는 소리를 막습니다. 관리자 화면에 "경보음 켜기" 버튼을 둡니다.
 - 경보는 2초 안에 화면에 떠야 합니다.
 - 시간이 되면(Could): 모바일 알림 앱 시안
