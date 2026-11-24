@@ -43,8 +43,10 @@ class BoardState:
     def __init__(self, chans=config.STREAM_CHANS, event_chans=("color",)):
         self.event_chans = set(event_chans)
         self.set_stream(chans)
-        self.values = {}         # {"bat": 7600.0, "sonar": 32.1}
+        self.values = {}         # {"bat": 7600.0, "sonar": 32.1, "line": 80.0}
         self.version = None
+        self.commands = None     # V에 온 지원 명령 ["F", "S", …] (V를 받기 전에는 None)
+        self.board_chans = None  # V에 온 숫자 채널 (보드에 비전 모듈이 없으면 line이 빠짐)
         self.last_error = None   # ("F", "비전 모듈 없음")
 
     def set_stream(self, chans):
@@ -61,6 +63,10 @@ class BoardState:
             return parts[2], _num(parts[3])
         elif kind == "V" and len(parts) >= 2:
             self.version = parts[1]
+            if len(parts) >= 3:
+                self.commands = [c for c in parts[2].split(",") if c]
+            if len(parts) >= 4:
+                self.board_chans = [c for c in parts[3].split(",") if c]
             if len(parts) >= 5:  # V|버전|명령들|숫자 채널|이벤트 채널
                 self.event_chans = set(c for c in parts[4].split(",") if c)
         elif kind == "!":
@@ -77,12 +83,27 @@ class BoardState:
         v = self.values.get("sonar")
         return v if isinstance(v, float) and v >= 0 else None
 
+    @property
+    def line(self):
+        """선 중심 x (0~159, 가운데 80). 못 찾았으면 -1, line 채널을 안 받으면 None"""
+        v = self.values.get("line")
+        return v if isinstance(v, float) else None
+
+
+def line_side(x, lo=60, hi=100):
+    """보드 F와 같은 기준으로 꺾는 쪽 (firmware/dog/main.py c_follow): lost · left · right · straight"""
+    if x is None or x < 0:
+        return "lost"
+    return "left" if x < lo else "right" if x > hi else "straight"
+
 
 class DogLink:
     def __init__(self, port=config.DOG_PORT, baud=config.DOG_BAUD):
         self.port, self.baud = port, baud
         self.inbox = queue.Queue()
         self.ser = None
+        self.opens = 0          # 포트를 연 횟수. 늘면 다시 붙은 것 (그사이 보드는 2초 감시로 멈췄을 수 있음)
+        self.quiet_breaks = 0   # BOARD_QUIET_S 넘게 못 보낸 횟수 (보드가 감시로 멈췄을 수 있음)
         self._tx_lock = threading.Lock()
         self._last_tx = 0.0
         self._closing = threading.Event()
@@ -107,6 +128,7 @@ class DogLink:
                 s.dtr = s.rts = False
             s.open()
             self.ser = s
+            self.opens += 1
             log.info("보드 연결 %s @%d", self.port, self.baud)
         except Exception as e:
             self.ser = None
@@ -128,7 +150,11 @@ class DogLink:
                 return False
             try:
                 self.ser.write(line)
-                self._last_tx = time.monotonic()
+                now = time.monotonic()
+                if self._last_tx and now - self._last_tx > config.BOARD_QUIET_S:
+                    self.quiet_breaks += 1
+                    log.warning("보드에 %.1f초 못 보냄 → 보드가 감시로 멈췄을 수 있음", now - self._last_tx)
+                self._last_tx = now
                 return True
             except Exception as e:
                 log.warning("보드로 보내기 실패: %s", e)
@@ -169,46 +195,83 @@ class DogLink:
 
 class FakeDog:
     """보드 없이 개발용. 명령에 ok로 답하고, T를 받으면 측정값을 흉내 냄.
-    fake.sonar 값을 바꾸면 그 거리가 D로 나가고, inject()로 아무 줄이나 넣을 수 있다."""
+    fake.sonar·fake.line 값을 바꾸면 그 값이 D로 나가고, inject()로 아무 줄이나 넣을 수 있다.
+    고장 흉내: fail={"F": "비전 모듈 없음"} → CMD|!|F|…|$ · silent={"F"} → 답 없음 ·
+    disconnect()/reconnect() → 케이블 빠짐·다시 꽂음 · mute=True → 측정값 끊김.
+    auto_stream=False면 스레드 없이 pump()를 부를 때마다 D 한 줄 (시험에서 시계를 직접 돌릴 때)"""
 
-    def __init__(self):
+    def __init__(self, auto_stream=True):
         self.inbox = queue.Queue()
-        self.sent = []          # 시험에서 확인용 [("F", 50, 25, 10000), …]
+        self.sent = []          # 시험에서 확인용 [("F", 50, 25, 10000), …]. 연결이 끊긴 동안 보낸 것은 안 들어감
         self.sonar = 60.0
+        self.line = 80.0        # 선 중심 x, -1이면 선을 못 찾음
         self.bat = 7800
         self.period = 0
         self.chans = []
         self.connected = True
+        self.opens = 1
+        self.quiet_breaks = 0
+        self.moving = False     # 보드가 걷고 있다고 볼 수 있는지 (F ok 뒤 True, S 뒤 False)
+        self.fail = {}
+        self.silent = set()
+        self.mute = False
+        self.auto_stream = auto_stream
         self._t0 = time.monotonic()
         self._closing = threading.Event()
 
     def open(self, stream=True):
-        if stream:
+        if stream and self.auto_stream:
             threading.Thread(target=self._stream, name="fakedog", daemon=True).start()
 
     def close(self):
+        self.send("S")
         self._closing.set()
 
     def inject(self, *parts):
         self.inbox.put([str(p) for p in parts])
 
+    def disconnect(self):
+        """케이블 빠짐: 보내기 실패, 측정값 없음. 진짜 보드는 2초 감시로 멈춤"""
+        self.connected = False
+        self.moving = False
+
+    def reconnect(self):
+        self.connected = True
+        self.opens += 1
+
     def send(self, name, *args):
+        if not self.connected:
+            return False
         self.sent.append((name, *args))
+        if name in self.silent:
+            return True
+        if name in self.fail:
+            self.inject("!", name, self.fail[name])
+            return True
         if name == "V":
-            self.inject("V", "fake-1", "F,U,S,P,L,A,T,V", "bat,sonar", "color")
-        else:
-            if name == "T":
-                self.period = int(args[0])
-                self.chans = [c for c in str(args[1]).split(",") if c and c != "color"] if len(args) > 1 else []
-            self.inject(name, "ok")
+            self.inject("V", "fake-1", "F,U,S,P,L,A,T,V", "bat,sonar,line", "color")
+            return True
+        if name == "T":
+            self.period = int(args[0])
+            self.chans = [c for c in str(args[1]).split(",") if c and c != "color"] if len(args) > 1 else []
+        elif name == "F":
+            self.moving = True
+        elif name in ("S", "P"):
+            self.moving = False
+        self.inject(name, "ok")
         return True
+
+    def pump(self):
+        """측정값 D 한 줄 (T를 받았고, 연결돼 있고, mute가 아닐 때)"""
+        if self.period and self.connected and not self.mute:
+            t = int((time.monotonic() - self._t0) * 1000)
+            vals = {"bat": self.bat, "sonar": self.sonar, "line": self.line}
+            self.inject("D", t, *[vals.get(c, -1) for c in self.chans])
 
     def _stream(self):
         while not self._closing.is_set():
             if self.period:
-                t = int((time.monotonic() - self._t0) * 1000)
-                vals = {"bat": self.bat, "sonar": self.sonar}
-                self.inject("D", t, *[vals.get(c, -1) for c in self.chans])
+                self.pump()
                 time.sleep(self.period / 1000)
             else:
                 time.sleep(0.05)

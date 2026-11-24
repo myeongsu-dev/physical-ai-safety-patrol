@@ -4,12 +4,20 @@
   python -m edge.agent --patrol       # 서버 명령 없이 바로 순찰 시작
   python -m edge.agent --fake         # 장치 없이 PC에서: 가짜 보드·카메라·온도 + 막힘·과열 장면
   python -m edge.agent --fake-dog     # 일부만 가짜로 (--fake-cam, --fake-thermo도 있음)
+  python -m edge.agent --drive        # 통신·주행만: 실제 보드 + MQTT, 머리 카메라·온도·AI 없이 (가상 과열·장애물 장면 없음)
 
-한 바퀴(step)마다: 보드 줄 처리 → 서버 명령 처리 → 온도 → 카메라 추론 → 이동 유지 → 1초마다 state
+한 바퀴(step)마다: 보드 줄 처리 → 서버 명령 처리 → 보드 연결 감시 → 온도 → 카메라 추론 → 이동 유지 → 1초마다 state
+
+걷기 안전 (보드 F는 선을 놓치면 직진하고, 끊겼다 다시 붙으면 Pi가 F를 다시 보낼 수 있어서):
+- 서버 stop·wait·guide 뒤, 또는 Pi가 안전 정지한 뒤에는 서버가 patrol·resume을 보내기 전까지 F를 보내지 않음 (hold)
+- 안전 정지: 보드 포트 끊김·다시 붙음, 측정값(D) 끊김, 선 유실(line=-1이 LINE_LOST_S), F에 보드 오류·무응답
+- F에 보드 ok가 오기 전에는 state에 patrol이 아니라 idle로 알림
+- 서버(MQTT)가 끊긴 것은 안전 정지 이유가 아님 (순찰 계속)
 """
 import argparse
 import logging
 import queue
+import signal
 import subprocess
 import threading
 import time
@@ -25,6 +33,7 @@ log = logging.getLogger("edge.agent")
 # 로봇 상태 (서버 fleet.py와 맞출 것): 대기·순찰·막힘 정지·과열 확인·출동·대피 안내·복귀
 STATUSES = ("idle", "patrol", "blocked", "heat_check", "go", "guide", "dock")
 MOVING = ("patrol", "go", "dock")
+WATCHED = MOVING + ("blocked", "heat_check")   # 보드가 끊기면 안전 정지할 상태 (멈춰 있어도 곧 다시 걸을 수 있음)
 PERSON_WAIT_S = 10.0   # F-07: 사람이 이만큼 계속 길을 막고 서 있으면 장애물로 보고
 STREAM_LOST_S = 3.0    # 측정값이 이만큼 안 오면 T를 다시 보냄 (보드가 다시 켜졌을 때)
 
@@ -56,6 +65,12 @@ class Agent:
 
         self.status = "idle"
         self.mode = "normal"
+        self.role = None          # 서버가 patrol로 정해 준 순찰 역할 A·B (ROBOT_ID와 별개)
+        self.hold = None          # 다시 걷지 않는 이유: stop·wait·guide·link·stream·line·board·no_ack·send (patrol·resume으로만 풀림)
+        self.acked = False        # 지금 이동(F)을 보드가 ok 했는지
+        self.await_ack = None     # 보드 답을 기다리는 F를 보낸 시각
+        self.line_lost_since = None
+        self.link_mark = None     # (포트 연 횟수, 감시 끊김 횟수): 바뀌면 보드가 멈췄을 수 있음
         self.marker = None
         self.target = None        # go·dock 목표 구역(마커)
         self.resume_to = None     # 막힘·과열·정지가 끝나면 돌아갈 상태
@@ -80,6 +95,7 @@ class Agent:
     def start(self):
         for dev in (self.dog, self.cam, self.thermo):
             dev.open()
+        self.link_mark = self._link_now()
         self._start_stream()
         self.reporter.start()
         log.info("로봇 %s 시작 (버전 %s, 통합 모델 %s)", config.ROBOT_ID, self.version, self._model_ver(self.model))
@@ -89,7 +105,13 @@ class Agent:
         return det.version if det is not None and det.ready else "없음"
 
     def stop(self):
+        """프로그램 끝: 보드 정지(S) → 서버에 idle 한 번 알리고 닫음"""
         self.dog.send("S")
+        self.status, self.hold, self.acked = "idle", "exit", False
+        try:
+            self.reporter.publish_state(self.state())
+        except Exception:
+            log.exception("마지막 state 보내기 실패")
         for dev in (self.dog, self.cam, self.thermo):
             dev.close()
         self.reporter.stop()
@@ -99,9 +121,10 @@ class Agent:
         self.dog.send("V")
         self.last_t_cmd = self.clock()
 
-    def run(self, hz=20):
+    def run(self, hz=20, until=None):
+        """until(threading.Event)가 켜질 때까지 (없으면 계속)"""
         period = 1.0 / hz
-        while True:
+        while until is None or not until.is_set():
             t = time.perf_counter()
             self.step()
             time.sleep(max(0.0, period - (time.perf_counter() - t)))
@@ -110,6 +133,7 @@ class Agent:
         now = self.clock()
         self._drain(self.dog.inbox, self.on_board)
         self._drain(self.reporter.inbox, lambda m: self.on_command(m[1]) if m[0] == "cmd" else self.on_mode(m[1]))
+        self._watch_link(now)
         self._thermo(now)
         self._vision(now)
         self._keepalive(now)
@@ -130,25 +154,82 @@ class Agent:
                 log.exception("처리 중 오류: %r", item)
 
     def state(self):
-        """potent/{로봇}/state 내용 (docs/protocol.md 2절)"""
-        return {"marker": self.marker, "status": self.status, "battery": self.board.battery,
+        """potent/{로봇}/state 내용 (docs/protocol.md 2절). 걷는 상태는 보드가 F에 ok 한 뒤에만 알림"""
+        status = self.status if self.status not in MOVING or self.acked else "idle"
+        return {"marker": self.marker, "status": status, "role": self.role, "battery": self.board.battery,
                 "sonar_cm": self.board.sonar_cm, "temp_c": self.temp_c, "version": self.version}
 
     # ---------- 움직임 ----------
     def _move(self, force=False):
-        """순찰·출동·복귀 중이면 선 따라가기를 보냄. 보드는 한 번에 최대 15초라 끝나기 전에 다시 보냄"""
-        if self.status not in MOVING:
+        """순찰·출동·복귀 중이면 선 따라가기를 보냄. 보드는 한 번에 최대 15초라 끝나기 전에 다시 보냄.
+        hold(정지 명령·안전 정지) 중에는 절대 보내지 않음"""
+        if self.status not in MOVING or self.hold:
             return
         now = self.clock()
         if force or now - self.last_move > config.MOVE_MS / 1000 - 2:
-            self.dog.send("F", config.PATROL_STRIDE, config.PATROL_ANGLE, config.MOVE_MS)
+            if force:
+                self.acked = False
+            if not self.dog.send("F", config.PATROL_STRIDE, config.PATROL_ANGLE, config.MOVE_MS):
+                self._safe_halt("send")
+                return
             self.last_move = now
+            self.await_ack = now
 
     def _halt(self, status):
         self.dog.send("S")
         self.status = status
+        self.acked = False
+        self.await_ack = None
+        self.next_state = 0.0   # 멈춤을 서버에 바로 알림
+
+    def _safe_halt(self, reason):
+        """Pi가 판단한 안전 정지: S → idle. 서버가 resume·patrol을 보내기 전에는 다시 걷지 않음 (하던 일은 resume_to에)"""
+        if self.status in MOVING:
+            self.resume_to = self.status
+        log.warning("안전 정지 (%s) → 서버 resume·patrol을 기다림", reason)
+        self.hold = reason
+        self.near, self.line_lost_since = 0, None
+        if self.status in MOVING or self.status == "blocked":
+            self.blocked = None
+            self._halt("idle")
+        else:  # 과열 확인 중: 확인은 이어 가되 끝나도 걷지 않음
+            self.dog.send("S")
+            self.acked, self.await_ack = False, None
+
+    def _link_now(self):
+        return getattr(self.dog, "opens", 0), getattr(self.dog, "quiet_breaks", 0)
+
+    def _watch_link(self, now):
+        """보드 연결 감시. 서버 연결과 달리 보드가 끊기면 멈추고, 다시 붙어도 저절로 걷지 않음"""
+        mark = self._link_now()
+        changed, self.link_mark = mark != self.link_mark, mark
+        if self.status not in WATCHED or self.hold:
+            return
+        if not self.dog.connected or changed:  # 끊김, 또는 다시 붙음·감시 끊김 (그사이 보드가 멈췄을 수 있음)
+            self._safe_halt("link")
+        elif now - self.last_d > config.SENSOR_STALE_S:
+            self._safe_halt("stream")
+
+    def _cant_move(self):
+        """걷기 시작해도 되는지. 안 되면 이유 (patrol·resume·go·dock 전에 봄)"""
+        if not self.dog.connected:
+            return "보드 연결 없음"
+        if self.clock() - self.last_d > config.SENSOR_STALE_S:
+            return "보드 측정값(D)이 안 옴"
+        if self.board.commands is not None and "F" not in self.board.commands:
+            return "보드가 F를 지원하지 않음 (main.py 확인)"
+        if config.LINE_GUARD and "line" in self.board.chans:
+            x = self.board.line
+            if x is None or x < 0:
+                return "바닥 비전 모듈이 선을 못 찾음 (line=%s)" % x
+        return None
 
     def _keepalive(self, now):
+        if self.await_ack is not None and now - self.await_ack > config.ACK_TIMEOUT_S:
+            log.warning("보드가 F에 %.1f초 동안 답이 없음", config.ACK_TIMEOUT_S)
+            self.await_ack = None
+            if self.status in MOVING:
+                self._safe_halt("no_ack")
         self._move()
         if self.dog.connected and now - self.last_d > STREAM_LOST_S and now - self.last_t_cmd > STREAM_LOST_S:
             self._start_stream()
@@ -162,8 +243,46 @@ class Agent:
         ev = self.board.update(parts)
         if parts[0] == "D":
             self._pi_guard()
+            self._line_guard()
+        elif len(parts) >= 2 and parts[1] == "ok":
+            self.on_ack(parts[0], None)
+        elif parts[0] == "!" and len(parts) >= 2:
+            self.on_ack(parts[1], parts[2] if len(parts) > 2 else "")
         if ev:
             self.on_board_event(*ev)
+
+    def on_ack(self, name, error):
+        """보드 답: CMD|F|ok|$ (error=None) · CMD|!|F|이유|$. 보낸 것(쓰기 성공)과 보드가 받아들인 것을 나눔"""
+        if name == "F":
+            self.await_ack = None
+            if error is None:
+                if self.status in MOVING and not self.hold and not self.acked:  # 정지 뒤 늦게 온 ok는 무시
+                    self.acked = True
+                    self.next_state = 0.0   # 걷기 시작을 서버에 바로 알림
+            else:
+                log.warning("보드가 F를 거부: %s", error)
+                if self.status in MOVING:
+                    self._safe_halt("board")
+        elif name == "loop" and error is not None:  # 보드 동작 반복에서 오류 → 보드가 스스로 멈춤
+            log.warning("보드 동작 오류(보드가 멈춤): %s", error)
+            if self.status in WATCHED and not self.hold:
+                self._safe_halt("board")
+        elif name == "S" and error is not None:
+            log.error("보드가 정지(S)를 못 함: %s", error)
+
+    def _line_guard(self):
+        """F는 선을 놓치면(-1) 직진함 → LINE_LOST_S 넘게 선이 안 보이면 Pi가 멈춤 (line 채널을 받을 때만)"""
+        if not config.LINE_GUARD or "line" not in self.board.chans or self.status not in MOVING:
+            self.line_lost_since = None
+            return
+        x, now = self.board.line, self.clock()
+        if x is not None and x >= 0:
+            self.line_lost_since = None
+        elif self.line_lost_since is None:
+            self.line_lost_since = now
+        elif now - self.line_lost_since >= config.LINE_LOST_S:
+            log.warning("선이 %.1f초 넘게 안 보임", now - self.line_lost_since)
+            self._safe_halt("line")
 
     def on_board_event(self, ch, val):
         if ch == "stop":
@@ -220,16 +339,26 @@ class Agent:
         if self.status != "blocked":
             return
         log.info("막힘 풀림")
-        self.status = self.resume_to or "patrol"
-        self.resume_to = None
         self.blocked = None
+        self._auto_resume(self.resume_to or "patrol")
+
+    def _auto_resume(self, target):
+        """막힘·과열이 끝나 하던 일로. hold(정지 명령·안전 정지) 중이면 걷지 않고 idle로 기다림"""
+        if self.hold and target in MOVING:
+            self.status, self.resume_to = "idle", target
+            return
+        self.status, self.resume_to = target, None
         self._move(force=True)
 
     # ---------- 서버에서 온 것 ----------
     def on_command(self, msg):
-        cmd = msg.get("cmd")
-        if cmd not in protocol.COMMANDS:
+        cmd = msg.get("cmd") if isinstance(msg, dict) else None
+        if not isinstance(cmd, str) or cmd not in protocol.COMMANDS:
             log.warning("모르는 명령 버림: %s", msg)
+            return
+        role = msg.get("role")
+        if cmd == "patrol" and role is not None and role not in protocol.ROLES:
+            log.warning("모르는 순찰 역할 버림: %s", msg)
             return
         log.info("서버 명령 %s", msg)
         if self.heat:  # 과열 확인 중 명령이 오면 서버가 넘겨받은 것
@@ -237,26 +366,40 @@ class Agent:
             self.heat_quiet_until = self.clock() + config.HEAT_COOLDOWN_S
         self.blocked = None if cmd != "resume" else self.blocked
         if cmd == "patrol":
-            self.target, self.status = None, "patrol"
-            self._move(force=True)
+            if role is not None:  # 역할 없이 온 patrol은 지난 역할을 이어 감
+                self.role = role
+            self._start("patrol", target=None)
         elif cmd == "stop":
             if self.status in MOVING:
                 self.resume_to = self.status
             self._halt("idle")
+            self.hold = "stop"
         elif cmd == "resume":
-            self.status = self.resume_to or "patrol"
-            self.resume_to = None
-            self.blocked = None
-            self._move(force=True)
+            self._start(self.resume_to or "patrol", target=self.target)
         elif cmd in ("go", "dock"):
-            self.target, self.status = msg.get("zone"), cmd
-            self._move(force=True)
+            self._start(cmd, target=msg.get("zone"))
         elif cmd == "wait":
             self._halt("idle")
+            self.hold = "wait"
             self.dog.send("P")
         elif cmd == "guide":
             self._halt("guide")
+            self.hold = "guide"
             self.dog.send("L", "arrow", msg.get("arrow", "x"))
+
+    def _start(self, status, target):
+        """서버가 걷게 할 때 (patrol·resume·go·dock): 보드·측정값·선을 확인하고 F. 안 되면 멈춘 채 idle"""
+        why = self._cant_move()
+        if why:
+            log.warning("%s 못 함: %s → idle로 멈춰 있음", status, why)
+            if self.status in MOVING or self.status == "blocked":
+                self.resume_to = status
+                self._halt("idle")
+            self.hold = self.hold or "not_ready"
+            return
+        self.status, self.target, self.resume_to = status, target, None
+        self.blocked, self.hold, self.near, self.line_lost_since = None, None, 0, None
+        self._move(force=True)
 
     def on_mode(self, msg):
         mode = msg.get("mode")
@@ -331,9 +474,7 @@ class Agent:
     def _end_heat(self, now):
         self.heat = None
         self.heat_quiet_until = now + config.HEAT_COOLDOWN_S
-        self.status = self.resume_to or "idle"
-        self.resume_to = None
-        self._move(force=True)
+        self._auto_resume(self.resume_to or "idle")
 
     # ---------- 카메라 (F-06 안전모, F-05 불꽃) ----------
     def _vision(self, now):
@@ -382,11 +523,16 @@ def main(argv=None):
     ap.add_argument("--fake-dog", action="store_true")
     ap.add_argument("--fake-cam", action="store_true")
     ap.add_argument("--fake-thermo", action="store_true")
+    ap.add_argument("--drive", action="store_true",
+                    help="통신·주행만: 머리 카메라·온도·AI 없이 (가짜 카메라·온도, 장면 없음). 보드는 --fake-dog가 없으면 실제")
     ap.add_argument("--patrol", action="store_true", help="서버 명령 없이 바로 순찰")
+    ap.add_argument("--role", choices=protocol.ROLES, help="--patrol 때 순찰 역할")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
                         format="%(asctime)s %(name)s %(levelname)s %(message)s", datefmt="%H:%M:%S")
+    if a.drive:
+        a.fake_cam = a.fake_thermo = True
 
     from edge.reporter import Reporter
 
@@ -409,18 +555,32 @@ def main(argv=None):
         from edge.thermo import Thermo
         thermo = Thermo()
 
-    agent = Agent(dog, cam, thermo, Reporter(), model=Detector(SAFETY))
-    agent.start()
-    if a.fake:
-        threading.Thread(target=_fake_scene, args=(dog,), daemon=True).start()
-    if a.patrol or a.fake:
-        agent.on_command(protocol.command("patrol"))
+    agent = Agent(dog, cam, thermo, Reporter(), model=None if a.drive else Detector(SAFETY))
+
+    def _on_term(*_):  # systemctl stop·kill도 Ctrl-C처럼 → finally에서 보드 정지
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, _on_term)
     try:
+        agent.start()
+        if a.fake:
+            threading.Thread(target=_fake_scene, args=(dog,), daemon=True).start()
+        if a.patrol or a.fake:
+            _wait_ready(agent)
+            agent.on_command(protocol.command("patrol", **({"role": a.role} if a.role else {})))
         agent.run()
     except KeyboardInterrupt:
         log.info("끝냄")
     finally:
-        agent.stop()
+        agent.stop()   # 보드 S. 강제 종료(kill -9·전원)면 보드가 2초 감시로 멈춤
+
+
+def _wait_ready(agent, secs=3.0):
+    """--patrol: 보드 V·측정값이 올 때까지 잠깐 돌림 (안 오면 patrol이 이유를 기록하고 멈춰 있음)"""
+    end = time.monotonic() + secs
+    while time.monotonic() < end and agent._cant_move():
+        agent.step()
+        time.sleep(0.05)
 
 
 if __name__ == "__main__":

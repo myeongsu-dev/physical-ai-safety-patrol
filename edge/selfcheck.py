@@ -8,7 +8,7 @@ from edge.agent import Agent
 from edge.camera import SOI, EOI, Frame, split_jpegs
 from edge.detect import (CLASS_CONF, CLASSES, Det, Voter, class_names, class_order_problems, filter_conf,
                          find_model, has_person, no_helmet)
-from edge.dog_link import BoardState, FakeDog, battery_pct
+from edge.dog_link import BoardState, FakeDog, battery_pct, line_side
 from edge.reporter import Reporter, photo_name, photo_url_from
 from edge.thermo import FakeThermo, raw_to_c
 
@@ -110,7 +110,7 @@ def check_reporter(spool):
 
 def make(spool, model=None, temp=25.0):
     clock = Clock()
-    dog = FakeDog()
+    dog = FakeDog(auto_stream=False)   # 측정값은 run()이 한 걸음마다 한 줄씩 (시계를 직접 돌림)
     rep = Reporter("B", spool_dir=spool)
     events = []
     rep.report_event = lambda type, jpeg=None, **f: events.append((type, bool(jpeg), f))
@@ -125,8 +125,9 @@ def make(spool, model=None, temp=25.0):
 
 
 def run(ag, clock, secs, dt=0.1):
-    for _ in range(int(secs / dt)):
+    for _ in range(int(round(secs / dt))):
         clock.t += dt
+        ag.dog.pump()
         ag.step()
 
 
@@ -134,12 +135,12 @@ def check_agent(spool):
     # 순찰 시작 → F, 측정값 → state
     ag, dog, th, clock, events, states = make(spool)
     assert dog.sent[0][0] == "T" and ("V",) in dog.sent
+    dog.bat, dog.sonar = 7400, 50.0
     ag.reporter.inbox.put(("cmd", protocol.command("patrol")))
-    dog.inject("D", 0, 7400, 50.0)
     run(ag, clock, 1.2)
     assert ag.status == "patrol" and ("F", config.PATROL_STRIDE, config.PATROL_ANGLE, config.MOVE_MS) in dog.sent
     assert states[-1]["battery"] == 50 and states[-1]["sonar_cm"] == 50.0 and states[-1]["version"] == "test"
-    assert set(states[-1]) == {"marker", "status", "battery", "sonar_cm", "temp_c", "version"}
+    assert set(states[-1]) == {"marker", "status", "role", "battery", "sonar_cm", "temp_c", "version"}
 
     # 마커
     dog.inject("E", 1, "color", 3)
@@ -148,22 +149,23 @@ def check_agent(spool):
 
     # 보드 막힘 정지 → obstacle + 사진 + 음성, 풀리면 다시 걸음
     dog.sent.clear()
+    dog.sonar = 12.0   # 보드가 멈출 만큼 가까움
     dog.inject("E", 2, "stop", 12.0)
     run(ag, clock, 0.2)
     assert ag.status == "blocked"
     assert events[-1][0] == "obstacle" and events[-1][1] and events[-1][2]["person"] is False
     assert ("A", config.VOICE_OBSTACLE, config.VOICE_VOLUME) in dog.sent
+    dog.sonar = 30.0
     dog.inject("E", 3, "resume", 30.0)
     run(ag, clock, 0.2)
     assert ag.status == "patrol" and dog.sent[-1][0] == "F"
 
     # Pi 보조 정지: 14cm 안 3번 연속
     n = len(events)
-    for _ in range(3):
-        dog.inject("D", 4, 7400, 10.0)
-    run(ag, clock, 0.2)
+    dog.sonar = 10.0
+    run(ag, clock, 0.4)
     assert ag.status == "blocked" and ("S",) in dog.sent and len(events) == n + 1
-    dog.inject("D", 5, 7400, 25.0)
+    dog.sonar = 25.0
     run(ag, clock, 0.2)
     assert ag.status == "patrol"
 
@@ -203,6 +205,7 @@ def check_agent(spool):
     ag.on_command(protocol.command("patrol"))
     ag.last_event["helmet"] = clock()  # 안전모 보고는 빼고 봄
     events.clear()
+    dog.sonar = 12.0
     dog.inject("E", 1, "stop", 12.0)
     run(ag, clock, 1.0)
     assert ag.status == "blocked" and [e[0] for e in events if e[0] == "obstacle"] == []
@@ -225,9 +228,236 @@ def check_agent(spool):
     assert events == [] and ag.heat is None
 
 
+def F():
+    return ("F", config.PATROL_STRIDE, config.PATROL_ANGLE, config.MOVE_MS)
+
+
+def check_messages(spool):
+    """MQTT로 받은 것: 내 cmd만, 보관(retained) 명령·깨진 JSON은 버림, mode는 받음"""
+    from types import SimpleNamespace as M
+
+    r = Reporter("B", spool_dir=spool)
+    on = lambda t, p, retain=False: r._on_message(None, None, M(topic=t, payload=p, retain=retain))  # noqa: E731
+    on("potent/B/cmd", b'{"cmd":"patrol","role":"A"}')
+    on("potent/A/cmd", b'{"cmd":"patrol","role":"A"}')     # 다른 로봇
+    on("potent/B/cmd", b'{"cmd":"patrol"', )                # 깨진 JSON
+    on("potent/B/cmd", b'[1, 2]')                           # 객체가 아님
+    on("potent/B/cmd", b'{"cmd":"patrol"}', retain=True)    # 브로커에 남은 옛 명령
+    on("potent/mode", b'{"mode":"normal"}')
+    got = []
+    while not r.inbox.empty():
+        got.append(r.inbox.get())
+    assert got == [("cmd", {"cmd": "patrol", "role": "A"}), ("mode", {"mode": "normal"})], got
+
+    assert line_side(80) == "straight" and line_side(59) == "left" and line_side(101) == "right"
+    assert line_side(-1) == "lost" and line_side(None) == "lost" and line_side(60) == line_side(100) == "straight"
+    st = BoardState("bat,sonar,line,color")
+    st.update(["V", "dog-1", "M,F,S,T,V", "bat,sonar,line", "color"])
+    assert st.commands == ["M", "F", "S", "T", "V"] and st.board_chans == ["bat", "sonar", "line"]
+    st.update(["D", "1", "7400", "-1", "-1"])
+    assert st.sonar_cm is None and st.line == -1.0
+
+
+def check_patrol(spool):
+    """오늘 목표: 서버 patrol·stop·resume → F·S·F, 보드 답 확인, 정지 뒤 다시 걷지 않음, 안전 정지"""
+    ag, dog, th, clock, events, states = make(spool)
+    run(ag, clock, 0.5)
+    status = lambda: ag.state()["status"]  # noqa: E731  서버에 보낼 상태 (states[-1]은 1초마다 실제로 보낸 것)
+
+    # patrol(role A) → F → 보드 ok → state patrol, role A (ROBOT_ID B와 별개)
+    dog.sent.clear()
+    ag.reporter.inbox.put(("cmd", {"cmd": "patrol", "role": "A"}))
+    run(ag, clock, 1.1)
+    assert dog.sent.count(F()) == 1 and ag.acked and status() == "patrol" and states[-1]["role"] == "A"
+
+    # 잘못된 명령: 모르는 역할·모르는 명령·cmd 없음 → 아무것도 안 바뀜
+    dog.sent.clear()
+    for bad in ({"cmd": "patrol", "role": "C"}, {"cmd": "fly"}, {"role": "A"}, {"cmd": 3}):
+        ag.on_command(bad)
+    run(ag, clock, 0.3)
+    assert dog.sent == [] and ag.status == "patrol" and ag.role == "A"
+
+    # 이동 유지: MOVE_MS - 2초마다 F를 다시 보냄
+    run(ag, clock, config.MOVE_MS / 1000)
+    assert dog.sent.count(F()) == 1 and status() == "patrol"
+
+    # stop → S → idle. 그 뒤로는 MOVE_MS가 몇 번 지나도, 보드 done·늦은 ok가 와도 F 없음
+    dog.sent.clear()
+    ag.reporter.inbox.put(("cmd", {"cmd": "stop"}))
+    run(ag, clock, 1.1)
+    assert dog.sent[0] == ("S",) and status() == "idle" and not dog.moving and ag.hold == "stop"
+    dog.inject("E", 9, "done", 1)
+    dog.inject("F", "ok")
+    run(ag, clock, config.MOVE_MS / 1000 * 3)
+    assert F() not in dog.sent and status() == "idle" and not ag.acked
+
+    # 정지 중 보드가 끊겼다 다시 붙어도 그대로 멈춰 있음
+    dog.disconnect()
+    run(ag, clock, 1.0)
+    dog.reconnect()
+    run(ag, clock, config.MOVE_MS / 1000)
+    assert F() not in dog.sent and ag.status == "idle"
+
+    # resume → 같은 역할로 다시 F
+    ag.reporter.inbox.put(("cmd", {"cmd": "resume"}))
+    run(ag, clock, 1.1)
+    assert dog.sent.count(F()) == 1 and status() == "patrol" and states[-1]["role"] == "A"
+
+    # 역할 없이 온 patrol은 지난 역할을 이어 감
+    ag.on_command({"cmd": "patrol"})
+    run(ag, clock, 0.3)
+    assert ag.role == "A" and ag.status == "patrol"
+
+    # 순찰 중 보드 연결이 끊김 → 안전 정지(idle). 다시 붙어도 저절로 걷지 않음 → resume으로만
+    dog.sent.clear()
+    dog.disconnect()
+    run(ag, clock, 0.3)
+    assert ag.status == "idle" and ag.hold == "link" and status() == "idle"
+    dog.reconnect()
+    run(ag, clock, config.MOVE_MS / 1000 * 2)
+    assert F() not in dog.sent and ag.status == "idle"
+    ag.on_command({"cmd": "resume"})
+    run(ag, clock, 0.3)
+    assert ag.status == "patrol" and dog.sent[-1] == F()
+
+    # 다시 붙은 것만 알아도(포트를 다시 엶, 보드에 2초 넘게 못 보냄) 안전 정지
+    for poke in (lambda: setattr(dog, "opens", dog.opens + 1), lambda: setattr(dog, "quiet_breaks", dog.quiet_breaks + 1)):
+        poke()
+        run(ag, clock, 0.2)
+        assert ag.status == "idle" and ag.hold == "link"
+        ag.on_command({"cmd": "resume"})
+        run(ag, clock, 0.3)
+        assert ag.status == "patrol"
+
+    # 측정값(D)이 끊김(보드 재시작 등) → SENSOR_STALE_S 뒤 안전 정지
+    dog.mute = True
+    run(ag, clock, config.SENSOR_STALE_S + 0.3)
+    assert ag.status == "idle" and ag.hold == "stream"
+    ag.on_command({"cmd": "resume"})
+    run(ag, clock, 0.3)
+    assert ag.status == "idle", "측정값이 없으면 resume도 안 함"
+    dog.mute = False
+    run(ag, clock, 0.2)
+    ag.on_command({"cmd": "resume"})
+    run(ag, clock, 0.3)
+    assert ag.status == "patrol"
+
+    # 선 유실: 잠깐(-1 한두 번)은 괜찮고, LINE_LOST_S 넘게 안 보이면 안전 정지. 선이 없으면 resume 안 됨
+    dog.line = -1
+    run(ag, clock, 0.3)
+    dog.line = 75.0
+    run(ag, clock, 0.3)
+    assert ag.status == "patrol"
+    dog.sent.clear()
+    dog.line = -1
+    run(ag, clock, config.LINE_LOST_S + 0.3)
+    assert ag.status == "idle" and ag.hold == "line" and dog.sent[0] == ("S",)
+    ag.on_command({"cmd": "resume"})
+    run(ag, clock, 0.3)
+    assert ag.status == "idle" and F() not in dog.sent
+    dog.line = 82.0
+    run(ag, clock, 0.2)
+    ag.on_command({"cmd": "resume"})
+    run(ag, clock, 0.3)
+    assert ag.status == "patrol" and dog.sent[-1] == F()
+
+    # 막혀 서 있는 중에 보드가 다시 붙음 → 물건이 치워져도 저절로 출발하지 않음
+    dog.sonar = 10.0
+    run(ag, clock, 0.4)
+    assert ag.status == "blocked"
+    dog.opens += 1
+    dog.sonar = 40.0
+    run(ag, clock, 3.0)
+    assert ag.status == "idle" and ag.hold == "link"
+    ag.on_command({"cmd": "resume"})
+    run(ag, clock, 0.3)
+    assert ag.status == "patrol"
+
+    # 보드가 F를 거부(CMD|!|F|…|$) → patrol로 알리지 않고 멈춤
+    ag, dog, th, clock, events, states = make(spool)
+    run(ag, clock, 0.5)
+    dog.fail["F"] = "비전 모듈 없음"
+    ag.on_command({"cmd": "patrol", "role": "B"})
+    run(ag, clock, 2.0)
+    assert ag.status == "idle" and ag.hold == "board" and all(s["status"] == "idle" for s in states)
+    assert states[-1]["role"] == "B"
+
+    # 보드가 F에 답이 없음 → ACK_TIMEOUT_S 뒤 S, idle
+    del dog.fail["F"]
+    dog.silent.add("F")
+    dog.sent.clear()
+    ag.on_command({"cmd": "patrol"})
+    run(ag, clock, config.ACK_TIMEOUT_S + 0.5)
+    assert ag.status == "idle" and ag.hold == "no_ack" and ("S",) in dog.sent
+    assert all(s["status"] == "idle" for s in states)
+    dog.silent.clear()
+
+    # 보드 동작 반복 오류(CMD|!|loop|…) → 보드가 멈췄으니 Pi도 idle
+    ag.on_command({"cmd": "patrol"})
+    run(ag, clock, 0.3)
+    assert ag.status == "patrol"
+    dog.inject("!", "loop", "I2C 오류")
+    run(ag, clock, 0.2)
+    assert ag.status == "idle" and ag.hold == "board"
+
+    # 보드가 없으면 patrol 안 함 (F를 보내지도, patrol로 알리지도 않음)
+    dog.disconnect()
+    dog.sent.clear()
+    ag.on_command({"cmd": "patrol"})
+    run(ag, clock, 1.1)
+    assert dog.sent == [] and ag.status == "idle" and states[-1]["status"] == "idle"
+    dog.reconnect()
+
+    # 선 위에 없으면 patrol 안 함
+    dog.line = -1
+    run(ag, clock, 0.3)
+    ag.on_command({"cmd": "patrol"})
+    run(ag, clock, 0.3)
+    assert ag.status == "idle" and F() not in dog.sent
+
+    # 막힘 중 stop → 물건이 치워져도 다시 걷지 않음
+    dog.line = 80.0
+    run(ag, clock, 0.2)
+    ag.on_command({"cmd": "patrol"})
+    dog.sonar = 10.0
+    run(ag, clock, 0.5)
+    assert ag.status == "blocked"
+    ag.on_command({"cmd": "stop"})
+    dog.sonar = 40.0
+    dog.sent.clear()
+    run(ag, clock, config.MOVE_MS / 1000)
+    assert ag.status == "idle" and F() not in dog.sent
+
+    # 과열 확인으로 서 있는 중 보드가 다시 붙음 → 과열 확인이 끝나도 저절로 걷지 않음
+    ag.on_command({"cmd": "resume"})
+    run(ag, clock, 0.3)
+    assert ag.status == "patrol"
+    th.value = 50.0
+    run(ag, clock, 0.6)
+    assert ag.status == "heat_check"
+    dog.opens += 1
+    th.value = 25.0
+    dog.sent.clear()
+    run(ag, clock, config.HEAT_RECHECK_S * config.HEAT_CHECKS + 1)
+    assert ag.heat is None and ag.status == "idle" and F() not in dog.sent and ag.resume_to == "patrol"
+
+    # 프로그램 끝 → 보드 S, 서버에 idle
+    ag.on_command({"cmd": "resume"})
+    run(ag, clock, 0.3)
+    assert ag.status == "patrol"
+    dog.sent.clear()
+    ag.stop()
+    assert dog.sent[0] == ("S",) and states[-1]["status"] == "idle"
+
+
 if __name__ == "__main__":
+    import logging
+
+    logging.disable(logging.WARNING)  # 일부러 낸 오류 기록은 숨김 (결과만 "edge ok")
     with tempfile.TemporaryDirectory() as d:
         check_parts()
         check_reporter(Path(d) / "r")
+        check_messages(Path(d) / "m")
         check_agent(Path(d) / "a")
+        check_patrol(Path(d) / "p")
     print("edge ok")

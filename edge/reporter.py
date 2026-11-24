@@ -102,7 +102,7 @@ class Reporter:
         except ImportError:
             log.warning("paho-mqtt 없음 → 서버 보고 안 함 (이벤트는 쌓아 둠)")
             return
-        c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"potent-edge-{self.robot}")
+        c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=f"potent-edge-{self.robot}", clean_session=True)
         c.on_connect = self._on_connect
         c.on_disconnect = self._on_disconnect
         c.on_message = self._on_message
@@ -124,9 +124,10 @@ class Reporter:
             log.warning("MQTT 연결 거부: %s", reason_code)
             return
         self.connected = True
+        # 다시 붙을 때마다 구독. clean session이라 끊긴 동안의 명령은 브로커가 쌓아 두지 않음 (옛 이동 명령이 늦게 오지 않게)
         client.subscribe(protocol.topic(self.robot, "cmd"), qos=1)
         client.subscribe(protocol.MODE_TOPIC, qos=1)
-        log.info("MQTT 연결됨")
+        log.info("MQTT 연결됨 %s:%d (구독 %s)", self.host, self.port, protocol.topic(self.robot, "cmd"))
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties):
         if self.connected:
@@ -142,7 +143,12 @@ class Reporter:
         if m.topic == protocol.MODE_TOPIC:
             self.inbox.put(("mode", msg))
         elif protocol.parse_topic(m.topic) == (self.robot, "cmd"):
+            if getattr(m, "retain", False):  # 브로커에 남아 있던 옛 명령 (다시 붙을 때마다 와서 지난 patrol이 다시 실행됨)
+                log.warning("브로커에 보관된(retained) 명령 버림: %s", msg)
+                return
             self.inbox.put(("cmd", msg))
+        else:
+            log.debug("이 로봇 것이 아닌 메시지 버림 %s", m.topic)
 
     def publish_state(self, state):
         if self.client and self.connected:
