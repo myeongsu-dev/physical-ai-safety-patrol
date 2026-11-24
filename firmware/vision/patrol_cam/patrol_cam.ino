@@ -171,7 +171,12 @@ static bool startCamera() {
   c.fb_count = 2;
   c.fb_location = CAMERA_FB_IN_PSRAM;
   c.grab_mode = CAMERA_GRAB_LATEST;
-  return esp_camera_init(&c) == ESP_OK;
+  if (esp_camera_init(&c) != ESP_OK) return false;
+  // 카메라가 거꾸로 달려 있어 화면이 180도 돌아가 있음 (위가 가까운 쪽, 좌우 반대 → 선 반대쪽으로 꺾었음). 바로 세움
+  sensor_t *s = esp_camera_sensor_get();
+  s->set_vflip(s, 1);
+  s->set_hmirror(s, 1);
+  return true;
 }
 
 void setup() {
