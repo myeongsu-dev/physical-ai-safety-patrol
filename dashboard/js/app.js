@@ -80,7 +80,7 @@ function render() {
   }
 
   renderSafety(serverOpen, now);
-  renderRobots(s, serverOpen, now);
+  if (admin) renderRobots(s, serverOpen, now); // 로봇 현황 카드는 관리자 화면에만 (README "화면별 항목")
   renderAlerts();
   if (admin) renderRobotLayer(s);
 }
@@ -602,6 +602,7 @@ document.getElementById("legend").innerHTML = legendHtml({ robots: admin });
 if (admin) {
   document.title = "안전 순찰 관제 (관리자)";
   document.getElementById("view-name").hidden = false;
+  document.getElementById("robot-panel").hidden = false;
   document.getElementById("detail-panel").hidden = false;
   document.getElementById("history-panel").hidden = false;
   document.getElementById("sound").hidden = false;

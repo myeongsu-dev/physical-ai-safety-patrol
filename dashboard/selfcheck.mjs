@@ -300,8 +300,7 @@ async function bootApp(search, tag) {
   const { el } = app;
   assert.equal(el("server .value").textContent, "연결됨");
   assert.equal(el("robots .value").textContent, "4/4대");
-  assert.equal((el("robot-list").innerHTML.match(/<li /g) || []).length, 4);
-  for (const n of ["MD-1", "MD-2", "MD-3", "MD-4"]) assert.ok(el("robot-list").innerHTML.includes(`>${n}</span>`));
+  assert.equal(el("robot-list").innerHTML, ""); // 로봇 현황 카드는 관리자 화면에만 (칸은 HTML에서 hidden 그대로)
   assert.equal(el("mode").textContent, "평상시");
   assert.equal(el("evacuate").hidden, true);
   globalThis.fake.fire("A");
@@ -311,11 +310,9 @@ async function bootApp(search, tag) {
   assert.equal(el("level").textContent, "화재");
   assert.equal(el("count-fire").textContent, "1건");
   assert.match(el("alerts").innerHTML, /화재/);
-  globalThis.fake.tick(); // 로봇 상태는 다음 state(1초 뒤)에 바뀌어 온다
-  assert.match(el("robot-list").innerHTML, /대피 안내/);
-  assert.match(el("robot-list").innerHTML, /충전 스테이션/); // C·D는 충전 스테이션에서 대기
+  globalThis.fake.tick();
+  assert.equal(el("robot-list").innerHTML, "");
   assert.equal(el("map .robots").innerHTML, ""); // 기본 화면에는 로봇 위치 없음
-  assert.doesNotMatch(el("robot-list").innerHTML, /class="version"/); // 버전은 관리자 화면에만
   // 지도: 마커 15개, 구역 5개, 경보·로봇 표시는 없음
   const svg = el("map").innerHTML;
   assert.equal(el("map").viewBox, "40 40 1920 1330");
@@ -337,6 +334,10 @@ async function bootApp(search, tag) {
   const { el, fake } = app;
   assert.equal(el("detail-panel").hidden, false);
   assert.match(el("detail").innerHTML, /남은 경보가 없습니다/);
+  // 로봇 현황 카드 4대
+  assert.equal(el("robot-panel").hidden, false);
+  assert.equal((el("robot-list").innerHTML.match(/<li /g) || []).length, 4);
+  for (const n of ["MD-1", "MD-2", "MD-3", "MD-4"]) assert.ok(el("robot-list").innerHTML.includes(`>${n}</span>`));
   // 로봇 카드 맨 아래 프로그램 버전 (가짜 로봇은 "fake")
   assert.equal((el("robot-list").innerHTML.match(/<div class="version">버전 fake<\/div>/g) || []).length, 4);
 
@@ -503,6 +504,9 @@ class FakeAudioContext {
   fake.tick(); // A가 A 경로를 맡고 있다는 state
   const fire = fake.fire("A");
   await tickWait();
+  fake.tick(); // 로봇 상태는 다음 state(1초 뒤)에 바뀌어 온다
+  assert.match(el("robot-list").innerHTML, /대피 안내/);
+  assert.match(el("robot-list").innerHTML, /충전 스테이션/); // C·D는 충전 스테이션에서 대기
   assert.match(el("evacuate-actions").innerHTML, /data-evac="1"/);
   await app.click({ evac: "1" });
   assert.match(el("evacuate-actions").innerHTML, /현장 안전을 확인했나요/);
