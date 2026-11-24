@@ -112,6 +112,9 @@
   - `{"kind": "mode", "mode": "evacuate"}`
 - 사진: `GET /photos/{이름}`
 - 아직 서버에 없어서 정하는 중: 화재 위치(통로 구간과 의심 구역), 대피 갈림길 방향, 경보를 해제한 관리자 이름, 경보 해제 시각, 지난 경보 목록
+  - 화재 위치와 대피 화살표는 대시보드가 아래 모양(제안)으로 받을 준비가 돼 있습니다. 서버가 보내지 않으면 지도에 그리지 않습니다. 서버와 정해지면 이 모양을 고칩니다
+    - `flame` 경보에 `"segment": [5, 6]`(불이 난 통로, 이웃한 마커 두 개), `"zones": ["A1", "B1"]`(양옆 의심 구역). 좁혀지면 같은 id로 다시
+    - 대피 `mode` 메시지에 `"guides": [{"marker": 7, "dir": "E", "exit": 2, "path": [7, 8]}]`. `dir`은 지도 기준 N·E·S·W, `path`는 비상구까지 지나는 마커 (없어도 됨)
   - 경보 이력(관리자 화면)은 지난 경보 목록 요청이 없어서 화면을 연 뒤에 받은 경보만 보여 줍니다. 해제 시각도 화면이 해제 소식을 받은 시각입니다
 
 ## 개발
@@ -119,6 +122,7 @@
 - 서버 없이: 가짜 서버 [js/fake.js](js/fake.js)가 진짜 서버와 같은 모양으로 메시지를 흘려 줍니다.
   - 저장소 폴더(`physical-ai-safety-patrol`)에서 `python -m http.server 8080 -d dashboard`를 켜고 `http://localhost:8080/fake.html`을 엽니다 (파일을 바로 열면 JS 모듈이 안 불러와집니다)
   - 경보 보내기, 화재와 대피를 버튼으로 해 볼 수 있습니다
+  - 화재 위치와 대피 화살표: `http://localhost:8080/?fake`(또는 `?fake&admin`)를 열고 브라우저 콘솔에서 `fake.fire("A", true)`. 예시 값(5–6번 통로, A1·B1, 비상구 2로 안내)을 붙여 보냅니다
   - 진짜 서버는 끊긴 로봇의 state를 더 보내지 않습니다. 로봇 연결 끊김은 화면이 마지막 state를 받은 시각으로 판단해야 합니다
 - 셀프 체크: `node dashboard/selfcheck.mjs`. 지도 데이터 [js/mapdata.js](js/mapdata.js)가 `server/map_config.py`와 같은지, 가짜 서버가 진짜 서버와 같은 순서·모양으로 보내는지 봅니다. CI가 `check.sh`로 돌립니다
 - 서버와 같이: `python -m server.fake_robots`와 `python -m server.api`를 켜고 브라우저로 엽니다

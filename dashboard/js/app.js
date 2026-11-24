@@ -1,11 +1,11 @@
-// 기본 화면. 서버·로봇 연결 상태, 현재 모드, 안전 현황, 로봇 현황, 최근 경보를 보여 준다.
-// 지도는 아직 바탕(구역, 통로, 마커, 비상구, 충전 스테이션)만 그린다.
+// 기본 화면. 서버·로봇 연결 상태, 현재 모드, 안전 현황, 최근 경보를 보여 준다. ?admin이면 관리자 화면.
+// 지도: 바탕(구역, 통로, 마커, 비상구, 충전 스테이션) 위에 화재 위치, 대피 화살표, (관리자 화면) 로봇 위치를 얹는다.
 
 import {
-  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel,
+  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, firePlaces,
 } from "./store.js";
 import { connect } from "./conn.js";
-import { VIEWBOX, baseMap, legendHtml, robotLayer, MARKER_POS } from "./map.js";
+import { VIEWBOX, baseMap, legendHtml, robotLayer, fireLayer, guideLayer, MARKER_POS } from "./map.js";
 import { createAlarm } from "./sound.js";
 
 const store = createStore();
@@ -82,7 +82,22 @@ function render() {
   renderSafety(serverOpen, now);
   if (admin) renderRobots(s, serverOpen, now); // 로봇 현황 카드는 관리자 화면에만 (README "화면별 항목")
   renderAlerts();
+  renderFireLayers();
   if (admin) renderRobotLayer(s);
+}
+
+// 화재 위치와 대피 화살표 (두 화면 모두). 서버가 값을 보내지 않으면 빈 층
+// 대피 표시는 서버가 끊겨도 내리지 않는 것처럼, 화살표도 마지막으로 받은 값을 그대로 둔다
+let fireKey = "";
+function renderFireLayers() {
+  const fires = firePlaces(store);
+  const guides = store.mode === "evacuate" ? store.guides : [];
+  const key = JSON.stringify([fires, guides]);
+  if (key === fireKey) return;
+  fireKey = key;
+  const map = document.getElementById("map");
+  map.querySelector(".fire").innerHTML = fireLayer(fires);
+  map.querySelector(".guides").innerHTML = guideLayer(guides);
 }
 
 // 현재 모드와 안전 현황. 서버가 끊겨 있으면 모를 값은 "-"
@@ -411,7 +426,10 @@ function renderPopup() {
   const mark = pos
     ? `<circle cx="${pos[0]}" cy="${pos[1]}" r="70" fill="none" stroke="#ff4d4d" stroke-width="12"/>`
     : "";
-  const where = [e.marker != null ? `마커 ${esc(e.marker)}` : "", esc(robotLabel(e.robot))].filter(Boolean).join(" · ");
+  // 화재: 서버가 통로 구간(segment)을 보내면 "5–6번 통로"와 작은 지도의 빨간 구간 (제안 모양)
+  const seg = e.type === "flame" && Array.isArray(e.segment) && e.segment.length === 2 ? `${esc(e.segment[0])}–${esc(e.segment[1])}번 통로` : "";
+  const where = [seg, e.marker != null ? `마커 ${esc(e.marker)}` : "", esc(robotLabel(e.robot))].filter(Boolean).join(" · ");
+  const under = e.type === "flame" ? fireLayer([{ segment: e.segment ?? null, zones: e.zones ?? [] }]) : "";
 
   wrap.innerHTML = `<div class="popup ${cls}" role="alertdialog" aria-modal="true" aria-labelledby="popup-title">
     <div class="popup-head">
@@ -421,7 +439,7 @@ function renderPopup() {
     <div class="popup-body">
       ${photo}
       <div class="popup-side">
-        <svg class="mini-map" viewBox="${VIEWBOX}" role="img" aria-label="경보 위치: ${where}">${baseMap()}${mark}</svg>
+        <svg class="mini-map" viewBox="${VIEWBOX}" role="img" aria-label="경보 위치: ${where}">${baseMap(under)}${mark}</svg>
         <p class="popup-where">${where}</p>
       </div>
     </div>
@@ -597,7 +615,7 @@ function esc(x) {
 // 지도 바탕은 한 번만 그린다
 const mapEl = document.getElementById("map");
 mapEl.setAttribute("viewBox", VIEWBOX);
-mapEl.innerHTML = baseMap() + '<g class="robots"></g>';
+mapEl.innerHTML = baseMap('<g class="fire"></g><g class="guides"></g>') + '<g class="robots"></g>';
 document.getElementById("legend").innerHTML = legendHtml({ robots: admin });
 if (admin) {
   document.title = "안전 순찰 관제 (관리자)";

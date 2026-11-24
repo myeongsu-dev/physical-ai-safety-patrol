@@ -25,6 +25,7 @@ export function createStore() {
     seen: {}, // 로봇 이름 → 마지막으로 연락된 시각 (ms). 모르면 null
     offline: {}, // 로봇 이름 → 서버가 끊겼다고 알려 줌 (online:false)
     mode: "normal",
+    guides: [], // 대피 화살표 [{ marker, dir, exit, path }] (제안 모양). 대피 모드일 때만
     events: new Map(), // id → 해제 안 된 경보
     // 경보 이력: id → { event, role, checkedAt }. 해제된 경보도 남긴다.
     // 서버에 지난 경보를 꺼내 주는 요청이 아직 없어서, 이 화면을 연 뒤에 받은 경보만 남는다
@@ -55,6 +56,8 @@ export function apply(store, msg, now = Date.now()) {
     }
   } else if (msg.kind === "mode") {
     store.mode = msg.mode;
+    // 대피 화살표 (서버와 정하는 중인 제안 모양, README "서버와 주고받기"). 없으면 빈 목록
+    store.guides = msg.mode === "evacuate" && Array.isArray(msg.guides) ? msg.guides : [];
   } else if (msg.kind === "event") {
     if (msg.checked) store.events.delete(msg.id);
     else store.events.set(msg.id, msg);
@@ -128,6 +131,14 @@ export function openAlerts(store, limit = 5) {
     .filter((e) => e.type !== "helmet")
     .sort((a, b) => b.id - a.id)
     .slice(0, limit);
+}
+
+// 지도에 그릴 화재 위치: 해제 안 된 flame 경보 중 서버가 통로 구간(segment)이나 의심 구역(zones)을 붙인 것.
+// 서버와 정하는 중인 제안 모양이라, 값이 없으면 아무것도 그리지 않는다
+export function firePlaces(store) {
+  return [...store.events.values()]
+    .filter((e) => e.type === "flame" && (Array.isArray(e.segment) || Array.isArray(e.zones)))
+    .map((e) => ({ id: e.id, segment: e.segment ?? null, zones: e.zones ?? [] }));
 }
 
 // 로봇 위치를 글자로. 예: "A 경로 · 마커 8", "충전 스테이션", "마커 14"

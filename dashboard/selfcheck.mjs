@@ -8,9 +8,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN } from "./js/mapdata.js";
-import { FakeServer, EVENT_TYPES } from "./js/fake.js";
-import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, ONLINE_SEC } from "./js/store.js";
-import { robotLayer, MARKER_POS } from "./js/map.js";
+import { FakeServer, EVENT_TYPES, PLACE_SAMPLE } from "./js/fake.js";
+import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, firePlaces, ONLINE_SEC } from "./js/store.js";
+import { robotLayer, fireLayer, guideLayer, corridorPoints, MARKER_POS } from "./js/map.js";
 
 // ---------- 1) 지도 데이터 ----------
 function readMapConfig() {
@@ -252,6 +252,53 @@ assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(N
   assert.equal(new Set(xs).size, 3);
 }
 
+// ---------- 화재 위치와 대피 화살표 (제안 모양) ----------
+{
+  // 통로 구간: 직선, 꺾이는 곳(줄기), 이어지지 않는 마커
+  assert.deepEqual(corridorPoints(5, 6), [MARKER_POS[5], MARKER_POS[6]]);
+  assert.deepEqual(corridorPoints(9, 6), [MARKER_POS[9], [MARKER_POS[9][0], MARKER_POS[6][1]], MARKER_POS[6]]);
+  assert.equal(corridorPoints(14, 11).length, 3);
+  assert.equal(corridorPoints(1, 13), null);
+  assert.equal(corridorPoints(1, 99), null);
+  // 예시 값의 길은 모두 통로로 이어진다
+  for (const g of PLACE_SAMPLE.guides) {
+    for (let i = 0; i + 1 < g.path.length; i++) assert.ok(corridorPoints(g.path[i], g.path[i + 1]), `${g.path} 이어지지 않음`);
+  }
+
+  let svg = fireLayer([{ segment: [5, 6], zones: ["A1", "B1"] }]);
+  assert.equal((svg.match(/class="fire-zone"/g) || []).length, 2);
+  assert.equal((svg.match(/화재 의심/g) || []).length, 2);
+  assert.ok(svg.includes('class="fire-segment" points="340,553 773,553"'));
+  // 모르는 구역, 이어지지 않는 구간은 그리지 않는다
+  assert.equal(fireLayer([{ segment: [1, 13], zones: ["Z9"] }]), "");
+  assert.equal(fireLayer([{ segment: null, zones: ["A2"] }]).match(/fire-segment/), null);
+
+  svg = guideLayer(PLACE_SAMPLE.guides);
+  assert.equal((svg.match(/class="guide-arrow"/g) || []).length, 3);
+  assert.equal((svg.match(/class="guide-path"/g) || []).length, 3);
+  assert.ok(svg.includes("1650,553 1738,553"), "8번에서 비상구 2 문까지");
+  assert.ok(svg.includes("rotate(0)"), "E 방향");
+  svg = guideLayer([{ marker: 5, dir: "W", exit: 1, path: [5] }, { marker: 99, dir: "N" }, { marker: 3, dir: "X" }]);
+  assert.equal((svg.match(/class="guide-arrow"/g) || []).length, 1, "없는 마커·방향은 화살표 없음");
+  assert.ok(svg.includes("340,553 258,553"), "마커 하나뿐인 길은 그 마커에서 문까지");
+  assert.equal(guideLayer([{ marker: 2, dir: "E", exit: 2, path: [2, 13] }]).match(/guide-path/), null, "이어지지 않는 길은 안 그림");
+
+  // 화면에 넘길 값: 해제 안 된 flame 중 위치가 붙은 것만, 대피 화살표는 대피 모드일 때만
+  const st = createStore();
+  apply(st, { kind: "event", id: 1, robot: "A", type: "flame", marker: 5, checked: false });
+  apply(st, { kind: "event", id: 2, robot: "A", type: "flame", marker: 5, segment: [5, 6], zones: ["A1"], checked: false });
+  apply(st, { kind: "event", id: 3, robot: "A", type: "heat", marker: 5, segment: [5, 6], checked: false });
+  assert.deepEqual(firePlaces(st), [{ id: 2, segment: [5, 6], zones: ["A1"] }]);
+  apply(st, { kind: "event", id: 2, robot: "A", type: "flame", marker: 5, segment: [5, 6], zones: ["A1"], checked: true });
+  assert.deepEqual(firePlaces(st), []);
+  apply(st, { kind: "mode", mode: "evacuate", guides: PLACE_SAMPLE.guides });
+  assert.equal(st.guides.length, 3);
+  apply(st, { kind: "mode", mode: "normal", guides: PLACE_SAMPLE.guides });
+  assert.deepEqual(st.guides, []);
+  apply(st, { kind: "mode", mode: "evacuate" });
+  assert.deepEqual(st.guides, [], "guides가 없으면 빈 목록");
+}
+
 // ---------- 5) 화면 파일이 오류 없이 돌아가는지 ----------
 // 브라우저 대신 아주 작은 가짜 document를 두고 js/app.js를 ?fake로 불러 본다
 const realSetInterval = globalThis.setInterval;
@@ -313,6 +360,19 @@ async function bootApp(search, tag) {
   globalThis.fake.tick();
   assert.equal(el("robot-list").innerHTML, "");
   assert.equal(el("map .robots").innerHTML, ""); // 기본 화면에는 로봇 위치 없음
+  // 화재 위치·대피 화살표: 서버가 값을 안 보내면(지금 진짜 서버) 빈 층, 예시 값을 보내면 기본 화면에도 그린다
+  assert.equal(el("map .fire").innerHTML, "");
+  assert.equal(el("map .guides").innerHTML, "");
+  const placed = globalThis.fake.fire("B", true);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.match(el("map .fire").innerHTML, /화재 의심/);
+  assert.equal((el("map .guides").innerHTML.match(/class="guide-arrow"/g) || []).length, 3);
+  await globalThis.fake.fetch(`/events/${placed.id}/check`, { method: "POST" });
+  await globalThis.fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(el("map .fire").innerHTML, "");
+  assert.equal(el("map .guides").innerHTML, "");
+  globalThis.fake.fire("A"); // 아래 지도 확인은 대피 중 그대로
   // 지도: 마커 15개, 구역 5개, 경보·로봇 표시는 없음
   const svg = el("map").innerHTML;
   assert.equal(el("map").viewBox, "40 40 1920 1330");

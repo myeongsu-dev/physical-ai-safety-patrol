@@ -28,6 +28,7 @@
 <div class="row">
   <span>현재: <b id="mode">-</b></span>
   <button data-act="fire">화재 + 대피</button>
+  <button data-act="fire-place">화재 + 대피 (위치·화살표 예시)</button>
   <button data-act="normal">대피 해제</button>
 </div>
 
@@ -113,6 +114,7 @@ document.body.addEventListener("click", async (ev) => {
   if (!b) return;
   const act = b.dataset.act;
   if (act === "fire") fake.fire();
+  if (act === "fire-place") fake.fire(undefined, true);
   if (act === "normal") await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
   if (b.dataset.emit) fake.emit(b.dataset.emit);
   if (b.dataset.check) await fake.fetch(`/events/${b.dataset.check}/check`, { method: "POST" });
