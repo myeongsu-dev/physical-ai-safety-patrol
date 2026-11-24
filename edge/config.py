@@ -46,12 +46,17 @@ SPOOL_DIR = Path(_get("EDGE_SPOOL", str(Path.home() / "potent-spool")))  # 못 �
 
 # ---------- 보드 명령 ----------
 STREAM_MS = _get("STREAM_MS", 200, _int)                 # T 측정값 주기
-STREAM_CHANS = _get("STREAM_CHANS", "bat,sonar,color")   # color는 이벤트 채널(바뀔 때만 옴)
+STREAM_CHANS = _get("STREAM_CHANS", "bat,sonar,line,color")  # line: 선 중심 x(0~159, 못 찾으면 -1). color는 이벤트 채널(바뀔 때만 옴)
 HEARTBEAT_S = _get("HEARTBEAT_S", 0.8, float)            # 보드 2초 감시보다 짧게
 HEARTBEAT_CMD = _get("HEARTBEAT_CMD", "V")               # 확인 필요: 전용 명령이 생기면 바꿈
-PATROL_STRIDE = _get("PATROL_STRIDE", 50, _int)
-PATROL_ANGLE = _get("PATROL_ANGLE", 25, _int)
-MOVE_MS = _get("MOVE_MS", 10000, _int)                   # 보드 최대 15초 → 끝나기 전에 다시 보냄
+BOARD_QUIET_S = _get("BOARD_QUIET_S", 2.0, float)        # 보드 감시 시간 (firmware/dog/main.py QUIET_MS). 넘게 못 보냈으면 보드가 멈췄다고 봄
+PATROL_STRIDE = _get("PATROL_STRIDE", 50, _int)          # F 보폭(속도 %가 아님)
+PATROL_ANGLE = _get("PATROL_ANGLE", 25, _int)            # F 꺾는 각도
+MOVE_MS = _get("MOVE_MS", 10000, _int)                   # 보드 최대 15초 → 끝나기 전에 다시 보냄 (정지·안전 정지 뒤에는 안 보냄)
+ACK_TIMEOUT_S = _get("ACK_TIMEOUT_S", 1.5, float)        # F를 보낸 뒤 보드 ok·!를 기다리는 시간. 없으면 멈춤
+SENSOR_STALE_S = _get("SENSOR_STALE_S", 1.0, float)     # 걷는 중 측정값(D)이 이만큼 안 오면 Pi가 멈춤 (보드 끊김·재시작)
+LINE_GUARD = _get("LINE_GUARD", 1, _int)                 # 선을 못 찾으면(line=-1) Pi가 멈춤 (보드 F는 선을 놓치면 직진함)
+LINE_LOST_S = _get("LINE_LOST_S", 1.0, float)            # 선이 이만큼 계속 안 보이면 멈춤
 PI_GUARD = _get("PI_GUARD", 1, _int)                     # F(선 따라가기) 중 Pi도 초음파로 멈춤(보조)
 SONAR_STOP_CM = _get("SONAR_STOP_CM", 14.0, float)
 SONAR_RESUME_CM = _get("SONAR_RESUME_CM", 18.0, float)
