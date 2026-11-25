@@ -223,7 +223,7 @@ let historyKey = "";
 
 function renderHistory(shown) {
   const list = alertHistory(store);
-  const key = list.map((h) => `${h.event.id}${h.checkedAt ? "c" : ""}`).join(",") + "|" + (shown?.id ?? "");
+  const key = list.map((h) => `${h.event.id}${h.event.checked ? "c" : ""}`).join(",") + "|" + (shown?.id ?? "");
   if (key === historyKey) return;
   historyKey = key;
   document.getElementById("history").innerHTML = list.length
@@ -234,15 +234,14 @@ function renderHistory(shown) {
 function historyRow(h, selected) {
   const e = h.event;
   const [label, cls] = ALERT_TEXT[e.type] ?? [e.type, ""];
-  // 좁은 화면에서는 "경보 해제"와 시각 사이에서만 줄이 바뀐다
-  const state = h.checkedAt ? `<span>경보 해제</span> <span>${clock(h.checkedAt)}</span>` : "해제 전";
+  const state = h.event.checked ? "경보 해제" : "해제 전";
   return `<tr class="${selected ? "selected" : ""}">
     <td><button type="button" class="row-btn" data-alert="${e.id}" aria-pressed="${selected}">${e.ts ? clock(e.ts * 1000) : "-"}</button></td>
     <td class="type ${cls}">${esc(label)}</td>
     <td>${esc(robotLabel(e.robot))}</td>
     <td>${h.role ? `${esc(h.role)} 경로` : "-"}</td>
     <td>${e.marker != null ? `마커 ${esc(e.marker)}` : "-"}</td>
-    <td class="state ${h.checkedAt ? "done" : "open"}">${state}</td>
+    <td class="state ${h.event.checked ? "done" : "open"}">${state}</td>
     <td>${e.photo
       ? `<a class="photo-btn" href="${esc(e.photo)}" data-photo="${esc(e.photo)}">사진 보기</a>`
       : `<span class="no-photo">사진 없음</span>`}</td>
@@ -338,10 +337,10 @@ function renderDetail(e) {
         <img src="${esc(e.photo)}" alt="${esc(label)} 경보 사진"></a>`
     : `<div class="photo none">사진 없음</div>`;
 
-  // 경보 이력에서 고른 해제된 경보는 버튼 없이 해제 시각만
+  // 경보 이력에서 고른 해제된 경보는 버튼 없이 "경보 해제"만
   const past = store.history.get(e.id);
   const action = e.checked
-    ? `<p class="done-text">경보 해제 ${past?.checkedAt ? clock(past.checkedAt) : ""}</p>`
+    ? `<p class="done-text">경보 해제</p>`
     : actionHtml(e);
   const err = e.checked ? "" : errorHtml(e);
 

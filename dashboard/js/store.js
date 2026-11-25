@@ -28,7 +28,7 @@ export function createStore() {
     guides: [], // 대피 화살표 [{ marker, dir, exit, path }] (제안 모양). 대피 모드일 때만
     fire: null, // 화재 위치 { segment, zones } (제안 모양). 서버가 화재를 확정해 대피 모드로 바꿀 때만
     events: new Map(), // id → 해제 안 된 경보
-    // 경보 이력: id → { event, role, checkedAt }. 해제된 경보도 남긴다.
+    // 경보 이력: id → { event, role }. 해제된 경보도 남긴다 (event.checked).
     // 서버에 지난 경보를 꺼내 주는 요청이 아직 없어서, 이 화면을 연 뒤에 받은 경보만 남는다
     history: new Map(),
   };
@@ -63,20 +63,18 @@ export function apply(store, msg, now = Date.now()) {
   } else if (msg.kind === "event") {
     if (msg.checked) store.events.delete(msg.id);
     else store.events.set(msg.id, msg);
-    remember(store, msg, now);
+    remember(store, msg);
   }
 }
 
 export const HISTORY_MAX = 200;
 
-function remember(store, msg, now) {
+function remember(store, msg) {
   const prev = store.history.get(msg.id);
   store.history.set(msg.id, {
     event: { ...(prev?.event ?? {}), ...msg },
     // 경보에는 경로가 없어서, 받은 순간 그 로봇이 맡고 있던 경로를 같이 적어 둔다
     role: prev?.role ?? store.robots[msg.robot]?.role ?? null,
-    // 서버가 해제 시각을 보내지 않아서, 이 화면이 해제 소식을 받은 시각
-    checkedAt: msg.checked ? (prev?.checkedAt ?? now) : null,
   });
   while (store.history.size > HISTORY_MAX) {
     store.history.delete(Math.min(...store.history.keys()));

@@ -603,23 +603,23 @@ class FakeAudioContext {
   await app.click({ viewerClose: "1" });
   assert.equal(el("viewer").hidden, true);
 
-  // 경보 이력: 해제한 경보도 남고, 눌러 보면 상세에 버튼 없이 해제 시각
+  // 경보 이력: 해제한 경보도 남고, 눌러 보면 상세에 버튼 없이 "경보 해제"
   assert.match(el("history").innerHTML, new RegExp(`data-alert="${fire.id}"`));
   assert.match(el("history").innerHTML, /해제 전/);
   assert.match(el("history").innerHTML, /A 경로/);
   await app.click({ check: String(fire.id) });
   await tickWait();
-  assert.match(el("history").innerHTML, /<span>경보 해제<\/span> <span>\d\d:\d\d:\d\d<\/span>/);
+  assert.match(el("history").innerHTML, /<td class="state done">경보 해제<\/td>/);
   assert.ok(!el("alerts").innerHTML.includes(`data-alert="${fire.id}"`)); // 최근 경보에서는 빠짐
   await app.click({ alert: String(fire.id) });
   const d = el("detail").innerHTML;
-  assert.match(d, /done-text/);
+  assert.match(d, /<p class="done-text">경보 해제<\/p>/);
   assert.ok(!d.includes("data-check"));
   assert.match(d, /<dt>경로<\/dt><dd>A 경로<\/dd>/);
   app.stop();
 }
 
-// 경보 이력: 해제된 경보도 남고, 해제 시각은 해제 소식을 받은 시각
+// 경보 이력: 해제된 경보도 남는다. 해제 시각은 두지 않는다
 {
   const st = createStore();
   apply(st, { kind: "event", id: 1, robot: "A", type: "heat", checked: false }, 1000);
@@ -627,8 +627,8 @@ class FakeAudioContext {
   const { alertHistory } = await import("./js/store.js");
   const h = alertHistory(st);
   assert.equal(h.length, 1);
-  assert.equal(h[0].checkedAt, 5000);
   assert.equal(h[0].event.checked, true);
+  assert.ok(!("checkedAt" in h[0]));
 }
 
 console.log("dashboard selfcheck OK");
