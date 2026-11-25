@@ -7,9 +7,11 @@
 //
 // 시험용 조작 (진짜 서버에는 없음)
 //   - fake.emit(종류, 로봇) : 경보 하나 바로 보냄. 종류는 obstacle · floor_object · helmet · heat · flame
-//   - fake.fire(로봇)      : 화재 경보 + 대피 모드
-//   - fake.fire(로봇, true): 위와 같고, 서버와 정하는 중인 제안 필드(화재 통로 구간·의심 구역, 대피 화살표)를 예시 값으로 붙임
-//                            (PLACE_SAMPLE, README "서버와 주고받기"). 진짜 서버는 아직 이 필드를 보내지 않는다
+//   - fake.fire(로봇)      : 화재 확정까지 한 번에. 로봇이 과열·불꽃 감지 경보를 보내고, 서버가 교차 확인 끝에
+//                            대피 모드로 바꾼 것처럼 (교차 확인 과정은 흉내 내지 않음)
+//   - fake.fire(로봇, true): 위와 같고, 대피 모드 메시지에 서버와 정하는 중인 제안 필드(화재 통로 구간·의심 구역,
+//                            대피 화살표)를 예시 값으로 붙임 (PLACE_SAMPLE, README "서버와 주고받기").
+//                            진짜 서버는 아직 이 필드를 보내지 않는다
 //
 // 메시지 필드는 server/fake_robots.py, common/protocol.py와 같다.
 
@@ -276,15 +278,17 @@ export class FakeServer {
     return this._addEvent(r, type);
   }
 
+  // 돌려주는 값: 불꽃 감지(flame) 경보
   fire(name, place = false) {
     const p = place === true ? PLACE_SAMPLE : place || null;
     const r = this.robots[name] || this._pickRobot();
-    const e = this._addEvent(r, "flame", p ? { segment: p.segment, zones: p.zones } : {});
-    this.setMode("evacuate", p ? { guides: p.guides } : {});
+    this._addEvent(r, "heat");
+    const e = this._addEvent(r, "flame");
+    this.setMode("evacuate", p ? { fire: { segment: p.segment, zones: p.zones }, guides: p.guides } : {});
     return e;
   }
 
-  // extra: mode 메시지에 붙일 제안 필드 (guides). 대피 해제(normal)면 붙이지 않는다
+  // extra: mode 메시지에 붙일 제안 필드 (fire, guides). 대피 해제(normal)면 붙이지 않는다
   setMode(mode, extra = {}) {
     this.mode = mode;
     this.modeExtra = mode === "evacuate" ? extra : {};

@@ -26,6 +26,7 @@ export function createStore() {
     offline: {}, // 로봇 이름 → 서버가 끊겼다고 알려 줌 (online:false)
     mode: "normal",
     guides: [], // 대피 화살표 [{ marker, dir, exit, path }] (제안 모양). 대피 모드일 때만
+    fire: null, // 화재 위치 { segment, zones } (제안 모양). 서버가 화재를 확정해 대피 모드로 바꿀 때만
     events: new Map(), // id → 해제 안 된 경보
     // 경보 이력: id → { event, role, checkedAt }. 해제된 경보도 남긴다.
     // 서버에 지난 경보를 꺼내 주는 요청이 아직 없어서, 이 화면을 연 뒤에 받은 경보만 남는다
@@ -58,6 +59,7 @@ export function apply(store, msg, now = Date.now()) {
     store.mode = msg.mode;
     // 대피 화살표 (서버와 정하는 중인 제안 모양, README "서버와 주고받기"). 없으면 빈 목록
     store.guides = msg.mode === "evacuate" && Array.isArray(msg.guides) ? msg.guides : [];
+    store.fire = msg.mode === "evacuate" && msg.fire && typeof msg.fire === "object" ? msg.fire : null;
   } else if (msg.kind === "event") {
     if (msg.checked) store.events.delete(msg.id);
     else store.events.set(msg.id, msg);
@@ -99,27 +101,26 @@ export function robotOnline(store, name, now = Date.now()) {
 }
 
 // 안전 현황 (README "안전 현황")
-//   화재: 대피 모드이거나 해제 안 된 화재 경보가 있음
-//         교차 확인은 아직 서버에 없어서, 지금은 flame 경보가 오면 바로 화재로 본다
-//   주의: 해제 안 된 통로 차단 · 밟힘 주의 · 과열 경보가 있거나, 끊긴 로봇이 있음
+//   화재: 대피 모드. 화재는 서버가 교차 확인(server/events.py)으로 확정하고 대피 모드로 바꾼다.
+//         화면이 서버보다 먼저 화재라고 하지 않는다
+//   주의: 해제 안 된 통로 차단 · 밟힘 주의 · 과열 · 불꽃 감지 경보가 있거나, 끊긴 로봇이 있음.
+//         불꽃 감지(flame)는 로봇 한 대가 불꽃을 본 것이라 서버가 아직 확인하는 중이다
 //   안전: 그 밖
 // 안전모 미착용(helmet)은 화면에 보여 줄지 미정이라 넣지 않는다.
 // 서버가 끊겨 있으면 지금 상태를 알 수 없으므로 level은 "unknown"
 export function safetySummary(store, now = Date.now()) {
-  const counts = { fire: 0, obstacle: 0, floor: 0 }; // 화재·과열, 통로 차단, 밟힘 주의
+  const counts = { heat: 0, obstacle: 0, floor: 0 }; // 과열·불꽃 감지, 통로 차단, 밟힘 주의
   for (const e of store.events.values()) {
-    if (e.type === "flame" || e.type === "heat") counts.fire += 1;
+    if (e.type === "flame" || e.type === "heat") counts.heat += 1;
     else if (e.type === "obstacle") counts.obstacle += 1;
     else if (e.type === "floor_object") counts.floor += 1;
   }
-  const flame = [...store.events.values()].some((e) => e.type === "flame");
-  const heat = counts.fire > 0 && !flame;
   const offline = connectionSummary(store, now).robots.filter((r) => !r.online).length;
 
   let level = "safe";
   if (store.server !== "open") level = "unknown";
-  else if (store.mode === "evacuate" || flame) level = "fire";
-  else if (heat || counts.obstacle || counts.floor || offline) level = "caution";
+  else if (store.mode === "evacuate") level = "fire";
+  else if (counts.heat || counts.obstacle || counts.floor || offline) level = "caution";
 
   return { level, mode: store.mode, counts, offline };
 }
@@ -133,12 +134,13 @@ export function openAlerts(store, limit = 5) {
     .slice(0, limit);
 }
 
-// 지도에 그릴 화재 위치: 해제 안 된 flame 경보 중 서버가 통로 구간(segment)이나 의심 구역(zones)을 붙인 것.
+// 지도에 그릴 화재 위치: 대피 모드 메시지에 서버가 붙인 통로 구간(segment)과 의심 구역(zones).
+// 불꽃 감지(flame) 경보만으로는 그리지 않는다. 화재는 서버가 확정한 것만 보여 준다.
 // 서버와 정하는 중인 제안 모양이라, 값이 없으면 아무것도 그리지 않는다
 export function firePlaces(store) {
-  return [...store.events.values()]
-    .filter((e) => e.type === "flame" && (Array.isArray(e.segment) || Array.isArray(e.zones)))
-    .map((e) => ({ id: e.id, segment: e.segment ?? null, zones: e.zones ?? [] }));
+  const f = store.fire;
+  if (store.mode !== "evacuate" || !f || !(Array.isArray(f.segment) || Array.isArray(f.zones))) return [];
+  return [{ segment: Array.isArray(f.segment) ? f.segment : null, zones: Array.isArray(f.zones) ? f.zones : [] }];
 }
 
 // 로봇 위치를 글자로. 예: "A 경로 · 마커 8", "충전 스테이션", "마커 14"

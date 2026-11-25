@@ -28,19 +28,22 @@ const ROBOT_STATUS_TEXT = {
   dock: "복귀",
 };
 
-// 경보 종류 → 화면 말과 색
+// 경보 종류 → 화면 말과 색.
+// flame은 로봇 한 대가 과열을 다시 재다가 불꽃까지 본 것(edge/agent.py). 화재는 서버가 교차 확인으로
+// 확정하고 대피 모드로 바꿀 때만 띄우므로, flame 경보는 "불꽃 감지"로 보여 준다
 const ALERT_TEXT = {
-  flame: ["화재", "fire"],
+  flame: ["불꽃 감지", "fire"],
   heat: ["과열", "fire"],
   obstacle: ["통로 차단", "warn"],
   floor_object: ["밟힘 주의", "warn"],
 };
 
 // 경보 알림 방식 (README "경보", 관리자 화면)
-//   화재, 통로 차단: 팝업 + 경보음 (화재는 팝업이 떠 있는 동안 경보음 반복)
-//   과열, 밟힘 주의: 팝업 없이 최근 경보에서 깜빡임 + 경보음
-const POPUP_TYPES = ["flame", "obstacle"];
-const BLINK_TYPES = ["heat", "floor_object"];
+//   통로 차단: 팝업 + 경보음
+//   과열, 불꽃 감지, 밟힘 주의: 팝업 없이 최근 경보에서 깜빡임 + 경보음
+//   화재(대피 모드): 맨 위 빨간 띠 + 경보음 반복. 관리자가 "경보음 멈춤"을 누르거나 대피가 풀리면 멈춤
+const POPUP_TYPES = ["obstacle"];
+const BLINK_TYPES = ["heat", "flame", "floor_object"];
 const FIRE_REPEAT_MS = 3000;
 // 화면을 연 직후 서버가 보내는 첫 묶음(이미 있던 경보)은 새 경보로 치지 않는다
 const SNAPSHOT_MS = 500;
@@ -113,7 +116,7 @@ function renderSafety(serverOpen, now) {
   const levelEl = document.getElementById("level");
   levelEl.textContent = LEVEL_TEXT[safe.level];
   levelEl.className = "level " + safe.level;
-  for (const key of ["fire", "obstacle", "floor"]) {
+  for (const key of ["heat", "obstacle", "floor"]) {
     const el = document.getElementById("count-" + key);
     const n = safe.counts[key];
     el.textContent = serverOpen ? `${n}건` : "-";
@@ -183,7 +186,6 @@ function renderRobotLayer(s) {
 const detail = {
   selected: null, // 고른 경보 id
   pending: null, // 경보 해제를 보내는 중인 id
-  confirming: null, // 화재: 한 번 더 확인을 기다리는 id
   error: null, // { id, text }
 };
 let alertsKey = "";
@@ -252,7 +254,8 @@ const evac = { confirming: false, pending: false, error: null };
 let evacKey = "";
 
 function renderEvacActions(evacuate) {
-  const key = JSON.stringify([evacuate, evac]);
+  const ringing = evacuate && evacAlarm.ringing && alarm.enabled;
+  const key = JSON.stringify([evacuate, evac, ringing]);
   if (key === evacKey) return;
   evacKey = key;
   const el = document.getElementById("evacuate-actions");
@@ -273,6 +276,7 @@ function renderEvacActions(evacuate) {
   } else {
     html = `<button type="button" class="evac-btn" data-evac="1">대피 해제</button>`;
   }
+  if (ringing) html += `<button type="button" class="evac-btn" data-evac-mute="1">경보음 멈춤</button>`;
   if (evac.error) html += `<span class="evac-error">${esc(evac.error)}</span>`;
   el.innerHTML = html;
 }
@@ -319,7 +323,7 @@ function alertItem(e, selected) {
 }
 
 function renderDetail(e) {
-  const key = JSON.stringify([e?.id, e?.checked, detail.pending, detail.confirming, detail.error]);
+  const key = JSON.stringify([e?.id, e?.checked, detail.pending, detail.error]);
   if (key === detailKey) return;
   detailKey = key;
   const el = document.getElementById("detail");
@@ -362,12 +366,6 @@ function actionHtml(e) {
   if (detail.pending === e.id) {
     return `<button type="button" class="check" disabled>보내는 중</button>`;
   }
-  if (detail.confirming === e.id) {
-    // 화재는 경보 해제 전에 화면 안에서 한 번 더 확인한다. 대피 해제는 따로 한다
-    return `<p class="confirm-text">화재 경보를 해제할까요? 대피 모드는 따로 해제해야 합니다.</p>
-      <div class="actions"><button type="button" class="check danger" data-check="${e.id}" data-sure="1">경보 해제</button>
-      <button type="button" class="cancel" data-cancel="1">취소</button></div>`;
-  }
   return `<button type="button" class="check" data-check="${e.id}">경보 해제</button>`;
 }
 
@@ -384,7 +382,8 @@ const alertState = {
   openedAt: null, // 첫 연결이 열린 시각
 };
 let popupKey = "";
-let fireTimer = null;
+// 대피 경보음: 서버가 대피 모드로 바꾸면(화재 확정) 3초마다 반복. 관리자가 멈추거나 대피가 풀리면 멈춤
+const evacAlarm = { ringing: false, timer: null };
 
 // 서버 메시지가 올 때마다 부른다. 새 경보면 팝업·깜빡임·경보음
 function noticeEvent(msg, now = Date.now()) {
@@ -398,6 +397,20 @@ function noticeEvent(msg, now = Date.now()) {
   alarm.play(msg.type);
 }
 
+// 서버 메시지가 올 때마다 부른다. 평상시 → 대피로 바뀌면 대피 경보음
+function noticeMode(msg, prevMode, now = Date.now()) {
+  if (!admin || msg.kind !== "mode") return;
+  if (msg.mode !== "evacuate") {
+    evacAlarm.ringing = false;
+    return;
+  }
+  if (prevMode === "evacuate") return;
+  const first = alertState.openedAt == null || now - alertState.openedAt < SNAPSHOT_MS;
+  if (first) return; // 화면을 열 때 이미 대피 중이었음
+  evacAlarm.ringing = true;
+  alarm.play("evacuate");
+}
+
 function currentPopup() {
   // 해제됐거나 사라진 경보는 건너뛴다
   while (alertState.queue.length && !store.events.has(alertState.queue[0])) alertState.queue.shift();
@@ -407,8 +420,8 @@ function currentPopup() {
 function renderPopup() {
   const e = currentPopup();
   const wrap = document.getElementById("popup");
-  const key = JSON.stringify([e?.id, alertState.queue.length, detail.pending, detail.confirming, detail.error]);
-  syncFireRepeat(e);
+  const key = JSON.stringify([e?.id, alertState.queue.length, detail.pending, detail.error]);
+  syncEvacRepeat();
   if (key === popupKey) return;
   popupKey = key;
   if (!e) {
@@ -426,10 +439,7 @@ function renderPopup() {
   const mark = pos
     ? `<circle cx="${pos[0]}" cy="${pos[1]}" r="70" fill="none" stroke="#ff4d4d" stroke-width="12"/>`
     : "";
-  // 화재: 서버가 통로 구간(segment)을 보내면 "5–6번 통로"와 작은 지도의 빨간 구간 (제안 모양)
-  const seg = e.type === "flame" && Array.isArray(e.segment) && e.segment.length === 2 ? `${esc(e.segment[0])}–${esc(e.segment[1])}번 통로` : "";
-  const where = [seg, e.marker != null ? `마커 ${esc(e.marker)}` : "", esc(robotLabel(e.robot))].filter(Boolean).join(" · ");
-  const under = e.type === "flame" ? fireLayer([{ segment: e.segment ?? null, zones: e.zones ?? [] }]) : "";
+  const where = [e.marker != null ? `마커 ${esc(e.marker)}` : "", esc(robotLabel(e.robot))].filter(Boolean).join(" · ");
 
   wrap.innerHTML = `<div class="popup ${cls}" role="alertdialog" aria-modal="true" aria-labelledby="popup-title">
     <div class="popup-head">
@@ -439,7 +449,7 @@ function renderPopup() {
     <div class="popup-body">
       ${photo}
       <div class="popup-side">
-        <svg class="mini-map" viewBox="${VIEWBOX}" role="img" aria-label="경보 위치: ${where}">${baseMap(under)}${mark}</svg>
+        <svg class="mini-map" viewBox="${VIEWBOX}" role="img" aria-label="경보 위치: ${where}">${baseMap()}${mark}</svg>
         <p class="popup-where">${where}</p>
       </div>
     </div>
@@ -452,20 +462,20 @@ function renderPopup() {
   wrap.querySelector?.(".check:not([disabled])")?.focus?.({ preventScroll: true });
 }
 
-// 화재 팝업이 떠 있는 동안 경보음을 반복한다
-function syncFireRepeat(e) {
-  const want = e && e.type === "flame" && alarm.enabled;
-  if (want && !fireTimer) fireTimer = setInterval(() => alarm.play("flame"), FIRE_REPEAT_MS);
-  if (!want && fireTimer) {
-    clearInterval(fireTimer);
-    fireTimer = null;
+// 대피 중이고 관리자가 멈추지 않았으면 경보음을 반복한다
+function syncEvacRepeat() {
+  if (store.mode !== "evacuate") evacAlarm.ringing = false;
+  const want = evacAlarm.ringing && alarm.enabled;
+  if (want && !evacAlarm.timer) evacAlarm.timer = setInterval(() => alarm.play("evacuate"), FIRE_REPEAT_MS);
+  if (!want && evacAlarm.timer) {
+    clearInterval(evacAlarm.timer);
+    evacAlarm.timer = null;
   }
 }
 
 function closePopup() {
   const id = alertState.queue.shift();
   if (id != null) detail.selected = id; // 닫은 경보를 오른쪽 경보 상세에 띄워 둔다
-  detail.confirming = null;
   render();
 }
 
@@ -488,15 +498,9 @@ function renderSoundButton() {
   b.setAttribute("aria-pressed", String(alarm.enabled));
 }
 
-async function checkAlert(id, sure) {
+async function checkAlert(id) {
   const e = store.events.get(id);
   if (!e || detail.pending) return;
-  if (e.type === "flame" && !sure) {
-    detail.confirming = id;
-    render();
-    return;
-  }
-  detail.confirming = null;
   detail.pending = id;
   detail.error = null;
   render();
@@ -535,7 +539,7 @@ function closeViewer() {
 
 function onClick(ev) {
   const t = ev.target.closest?.(
-    "[data-alert], [data-check], [data-cancel], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel], [data-photo], [data-viewer-close]",
+    "[data-alert], [data-check], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel], [data-evac-mute], [data-photo], [data-viewer-close]",
   );
   if (!t) return;
   if (t.dataset.photo) {
@@ -545,7 +549,6 @@ function onClick(ev) {
     closeViewer();
   } else if (t.dataset.alert) {
     detail.selected = Number(t.dataset.alert);
-    detail.confirming = null;
     alertState.blink.delete(detail.selected); // 눌러서 봤으면 깜빡임을 멈춘다
     render();
   } else if (t.dataset.popupClose) {
@@ -554,6 +557,9 @@ function onClick(ev) {
     releaseEvac(t.dataset.sure === "1");
   } else if (t.dataset.evacCancel) {
     evac.confirming = false;
+    render();
+  } else if (t.dataset.evacMute) {
+    evacAlarm.ringing = false;
     render();
   } else if (t.dataset.sound) {
     if (alarm.enabled) {
@@ -569,10 +575,7 @@ function onClick(ev) {
       });
     }
   } else if (t.dataset.check) {
-    checkAlert(Number(t.dataset.check), t.dataset.sure === "1");
-  } else if (t.dataset.cancel) {
-    detail.confirming = null;
-    render();
+    checkAlert(Number(t.dataset.check));
   }
 }
 
@@ -638,8 +641,10 @@ if (admin) {
 const conn = connect({
   fake: params.has("fake"),
   onMessage: (msg) => {
+    const prevMode = store.mode;
     apply(store, msg);
     noticeEvent(msg);
+    noticeMode(msg, prevMode);
     render();
   },
   onStatus: (status) => {

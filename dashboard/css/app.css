@@ -317,12 +317,8 @@ ul { list-style: none; margin: 0; padding: 0; }
   cursor: pointer;
 }
 .detail .check { width: 100%; border: 1px solid var(--text); background: var(--text); color: #ffffff; font-weight: 600; }
-.detail .check.danger { border-color: var(--bad); background: var(--bad); }
 .detail .check:disabled { opacity: 0.6; cursor: default; }
-.detail .cancel { border: 1px solid var(--line); background: var(--panel); color: var(--text); }
-.detail .actions { display: grid; grid-template-columns: 2fr 1fr; gap: var(--gap); }
 .detail button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
-.confirm-text { margin: 0 0 var(--gap); color: var(--bad); font-weight: 600; }
 .error { margin: var(--gap) 0 0; color: var(--bad); font-size: 13px; }
 
 /* ---------- 경보음 켜기 (관리자 화면) ---------- */
@@ -383,10 +379,7 @@ ul { list-style: none; margin: 0; padding: 0; }
   cursor: pointer;
 }
 .popup .check { width: 100%; border: 1px solid var(--text); background: var(--text); color: #ffffff; font-weight: 600; }
-.popup .check.danger { border-color: var(--bad); background: var(--bad); }
 .popup .check:disabled { opacity: 0.6; cursor: default; }
-.popup .cancel { border: 1px solid var(--line); background: var(--panel); color: var(--text); }
-.popup .actions { display: grid; grid-template-columns: 2fr 1fr; gap: var(--gap); }
 .popup-close { width: 100%; margin-top: var(--gap); border: 1px solid var(--line); background: var(--panel); color: var(--muted); }
 .popup button:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 @media (max-width: 600px) {

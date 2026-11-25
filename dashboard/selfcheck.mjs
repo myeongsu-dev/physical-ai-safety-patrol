@@ -184,7 +184,7 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
   for (const r of ["A", "B", "C", "D"]) apply(st, { kind: "state", robot: r, online: true }, T);
   let s = safetySummary(st, T);
   assert.equal(s.level, "safe");
-  assert.deepEqual(s.counts, { fire: 0, obstacle: 0, floor: 0 });
+  assert.deepEqual(s.counts, { heat: 0, obstacle: 0, floor: 0 });
 
   // 안전모 미착용은 단계와 건수에 안 들어감
   apply(st, { kind: "event", id: 1, type: "helmet", checked: false }, T);
@@ -196,7 +196,7 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
   apply(st, { kind: "event", id: 4, type: "heat", checked: false }, T);
   s = safetySummary(st, T);
   assert.equal(s.level, "caution");
-  assert.deepEqual(s.counts, { fire: 1, obstacle: 1, floor: 1 });
+  assert.deepEqual(s.counts, { heat: 1, obstacle: 1, floor: 1 });
 
   // 해제하면 빠짐
   for (const id of [2, 3, 4]) apply(st, { kind: "event", id, checked: true }, T);
@@ -208,14 +208,17 @@ await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal
   assert.equal(s.level, "caution");
   assert.equal(s.offline, 1);
 
-  // 화재 경보나 대피 모드 → 화재
+  // 불꽃 감지(flame)는 서버가 아직 확인하는 중이라 주의. 화재는 서버가 대피 모드로 바꿨을 때만
+  for (const r of ["A", "B", "C", "D"]) apply(st, { kind: "state", robot: r, online: true }, T + 6000);
   apply(st, { kind: "event", id: 5, type: "flame", checked: false }, T + 6000);
-  assert.equal(safetySummary(st, T + 6000).level, "fire");
-  assert.equal(safetySummary(st, T + 6000).counts.fire, 1);
-  apply(st, { kind: "event", id: 5, checked: true });
+  assert.equal(safetySummary(st, T + 6000).level, "caution");
+  assert.equal(safetySummary(st, T + 6000).counts.heat, 1);
   apply(st, { kind: "mode", mode: "evacuate" });
   assert.equal(safetySummary(st, T + 6000).level, "fire");
+  apply(st, { kind: "event", id: 5, checked: true });
+  assert.equal(safetySummary(st, T + 6000).level, "fire", "경보를 해제해도 대피 중이면 화재");
   apply(st, { kind: "mode", mode: "normal" });
+  assert.equal(safetySummary(st, T + 6000).level, "safe");
 
   // 최근 경보: 해제 안 된 것만, 새것부터, 안전모 미착용 뺌
   apply(st, { kind: "event", id: 6, type: "obstacle", checked: false });
@@ -283,19 +286,18 @@ assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(N
   assert.ok(svg.includes("340,553 258,553"), "마커 하나뿐인 길은 그 마커에서 문까지");
   assert.equal(guideLayer([{ marker: 2, dir: "E", exit: 2, path: [2, 13] }]).match(/guide-path/), null, "이어지지 않는 길은 안 그림");
 
-  // 화면에 넘길 값: 해제 안 된 flame 중 위치가 붙은 것만, 대피 화살표는 대피 모드일 때만
+  // 화면에 넘길 값: 화재 위치와 대피 화살표는 대피 모드 메시지에 붙은 것만. 불꽃 감지 경보로는 그리지 않는다
   const st = createStore();
-  apply(st, { kind: "event", id: 1, robot: "A", type: "flame", marker: 5, checked: false });
-  apply(st, { kind: "event", id: 2, robot: "A", type: "flame", marker: 5, segment: [5, 6], zones: ["A1"], checked: false });
-  apply(st, { kind: "event", id: 3, robot: "A", type: "heat", marker: 5, segment: [5, 6], checked: false });
-  assert.deepEqual(firePlaces(st), [{ id: 2, segment: [5, 6], zones: ["A1"] }]);
-  apply(st, { kind: "event", id: 2, robot: "A", type: "flame", marker: 5, segment: [5, 6], zones: ["A1"], checked: true });
+  apply(st, { kind: "event", id: 1, robot: "A", type: "flame", marker: 5, segment: [5, 6], zones: ["A1"], checked: false });
   assert.deepEqual(firePlaces(st), []);
-  apply(st, { kind: "mode", mode: "evacuate", guides: PLACE_SAMPLE.guides });
+  apply(st, { kind: "mode", mode: "evacuate", fire: { segment: [5, 6], zones: ["A1"] }, guides: PLACE_SAMPLE.guides });
+  assert.deepEqual(firePlaces(st), [{ segment: [5, 6], zones: ["A1"] }]);
   assert.equal(st.guides.length, 3);
-  apply(st, { kind: "mode", mode: "normal", guides: PLACE_SAMPLE.guides });
+  apply(st, { kind: "mode", mode: "normal", fire: { segment: [5, 6] }, guides: PLACE_SAMPLE.guides });
+  assert.deepEqual(firePlaces(st), []);
   assert.deepEqual(st.guides, []);
   apply(st, { kind: "mode", mode: "evacuate" });
+  assert.deepEqual(firePlaces(st), [], "fire가 없으면 그리지 않음");
   assert.deepEqual(st.guides, [], "guides가 없으면 빈 목록");
 }
 
@@ -355,8 +357,9 @@ async function bootApp(search, tag) {
   assert.equal(el("mode").textContent, "대피");
   assert.equal(el("evacuate").hidden, false);
   assert.equal(el("level").textContent, "화재");
-  assert.equal(el("count-fire").textContent, "1건");
-  assert.match(el("alerts").innerHTML, /화재/);
+  assert.equal(el("count-heat").textContent, "2건"); // 로봇이 보낸 과열 + 불꽃 감지
+  assert.match(el("alerts").innerHTML, /불꽃 감지/);
+  assert.ok(!/>화재</.test(el("alerts").innerHTML), "경보 목록에 화재라고 쓰지 않음");
   globalThis.fake.tick();
   assert.equal(el("robot-list").innerHTML, "");
   assert.equal(el("map .robots").innerHTML, ""); // 기본 화면에는 로봇 위치 없음
@@ -428,18 +431,14 @@ async function bootApp(search, tag) {
   assert.match(el("detail").innerHTML, /<dt>온도<\/dt>/);
   assert.ok(!el("detail").innerHTML.includes("신뢰도")); // 과열은 온도로 판단해서 신뢰도를 안 보여 줌
 
-  // 화재: 한 번 더 확인. 취소하면 그대로
-  const fire = fake.emit("flame", "C");
+  // 불꽃 감지: 다른 경보처럼 바로 해제. 화재가 아니라서 대피 모드도 안 됨
+  const flame = fake.emit("flame", "C");
   await tickWait();
-  await app.click({ check: String(fire.id) });
-  assert.match(el("detail").innerHTML, /대피 모드는 따로 해제/);
-  assert.equal(fake.events.find((e) => e.id === fire.id).checked, false);
-  await app.click({ cancel: "1" });
-  assert.ok(!el("detail").innerHTML.includes("대피 모드는 따로 해제"));
-  await app.click({ check: String(fire.id) });
-  await app.click({ check: String(fire.id), sure: "1" });
+  assert.match(el("detail").innerHTML, /불꽃 감지/);
+  assert.equal(el("evacuate").hidden, true);
+  await app.click({ check: String(flame.id) });
   await tickWait();
-  assert.equal(fake.events.find((e) => e.id === fire.id).checked, true);
+  assert.equal(fake.events.find((e) => e.id === flame.id).checked, true);
 
   // 경보 해제를 못 보내면 알려 준다 (없는 경보 번호 → 404)
   const heatId = heat.id;
@@ -472,13 +471,14 @@ class FakeAudioContext {
 {
   const { createAlarm } = await import("./js/sound.js");
   const a = createAlarm(FakeAudioContext);
-  assert.equal(a.play("flame"), 0); // 켜기 전에는 소리 안 남
+  assert.equal(a.play("evacuate"), 0); // 켜기 전에는 소리 안 남
   assert.ok(await a.enable());
-  assert.equal(a.play("flame"), 3);
+  assert.equal(a.play("evacuate"), 3);
   assert.equal(a.play("obstacle"), 2);
   assert.equal(a.play("heat"), 1);
+  assert.equal(a.play("flame"), 1);
   a.disable();
-  assert.equal(a.play("flame"), 0);
+  assert.equal(a.play("evacuate"), 0);
   assert.equal(createAlarm(undefined).supported, false);
 }
 
@@ -521,25 +521,35 @@ class FakeAudioContext {
   await app.click({ alert: String(heat.id) });
   assert.ok(!el("alerts").innerHTML.includes("blink"));
 
-  // 화재 → 팝업 + 경보음 3번. 팝업에서 한 번 더 확인하고 해제하면 팝업이 닫힌다
-  const fire = fake.emit("flame", "C");
+  // 불꽃 감지 → 팝업 없이 깜빡임 + 경보음 1번. 화재가 아님
+  const flame = fake.emit("flame", "C");
   await tickWait();
-  assert.equal(beeps, 6);
-  assert.match(el("popup").innerHTML, /화재 경보/);
-  await app.click({ check: String(fire.id) });
-  assert.match(el("popup").innerHTML, /대피 모드는 따로 해제/);
-  await app.click({ check: String(fire.id), sure: "1" });
-  await tickWait();
-  assert.equal(fake.events.find((e) => e.id === fire.id).checked, true);
+  assert.equal(beeps, 4);
   assert.equal(el("popup").hidden, true);
+  assert.equal(el("evacuate").hidden, true);
+  assert.match(el("alerts").innerHTML, new RegExp(`class="[^"]*blink[^"]*"><button type="button" class="alert-btn" data-alert="${flame.id}"`));
+
+  // 화재 확정(서버가 대피 모드로 바꿈) → 경보음 3번, 대피 띠에 "경보음 멈춤"
+  beeps = 0;
+  fake.fire("D");
+  await tickWait();
+  assert.equal(beeps, 1 + 1 + 3); // 과열, 불꽃 감지, 대피
+  assert.equal(el("evacuate").hidden, false);
+  assert.equal(el("popup").hidden, true);
+  assert.match(el("evacuate-actions").innerHTML, /data-evac-mute="1"/);
+  await app.click({ evacMute: "1" });
+  assert.ok(!el("evacuate-actions").innerHTML.includes("data-evac-mute"));
+  await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
+  await tickWait();
 
   // 팝업이 여러 개면 차례로
   fake.emit("obstacle", "A");
-  fake.emit("flame", "B");
+  fake.emit("obstacle", "B");
   await tickWait();
   assert.match(el("popup").innerHTML, /대기 중인 팝업 1건/);
   await app.click({ popupClose: "1" });
-  assert.match(el("popup").innerHTML, /화재 경보/);
+  assert.match(el("popup").innerHTML, /통로 차단 경보/);
+  assert.ok(!el("popup").innerHTML.includes("대기 중인 팝업"));
 
   // 경보음 끄기 → 소리 안 남
   await app.click({ sound: "1" });
@@ -598,7 +608,6 @@ class FakeAudioContext {
   assert.match(el("history").innerHTML, /해제 전/);
   assert.match(el("history").innerHTML, /A 경로/);
   await app.click({ check: String(fire.id) });
-  await app.click({ check: String(fire.id), sure: "1" });
   await tickWait();
   assert.match(el("history").innerHTML, /<span>경보 해제<\/span> <span>\d\d:\d\d:\d\d<\/span>/);
   assert.ok(!el("alerts").innerHTML.includes(`data-alert="${fire.id}"`)); // 최근 경보에서는 빠짐
