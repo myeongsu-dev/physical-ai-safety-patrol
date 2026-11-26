@@ -134,6 +134,12 @@ if __name__ == "__main__":
     # 출구가 둘이면 가까운 쪽으로
     p = {a["marker"]: a for a in plan(exits=[15, 1])}
     assert p[2]["exit"] == 1 and p[2]["dir"] == "W" and p[12]["exit"] == 15
+    # 팀이 정한 출구(5, 8): 모두 둘 중 가까운 쪽으로, 5에서 불나면 8로
+    p = {a["marker"]: a for a in plan()}
+    assert map_config.EXITS == [5, 8] and p[5]["dir"] == p[8]["dir"] == "here"
+    assert p[1]["exit"] == 5 and p[4]["exit"] == 8 and p[15]["path"][0] == 15 and p[15]["exit"] in (5, 8)
+    p = {a["marker"]: a for a in plan(fire=5)}
+    assert all(a["exit"] == 8 for m, a in p.items() if m != 5)
     # 로봇 화살표: 북쪽을 보는 로봇에게 동쪽이면 right, 서쪽이면 left, 남쪽(뒤)은 펌웨어에 down이 없어 x
     assert robot_arrow("E", "N") == "right" and robot_arrow("W", "N") == "left" and robot_arrow("N", "N") == "up"
     assert robot_arrow("S", "N") == "x" and robot_arrow("E", None) is None and robot_arrow("here", None) == "x"

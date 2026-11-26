@@ -22,7 +22,7 @@ heat 이벤트는 events.HeatCheck로 교차 확인해 출동·대피 명령을 
 헤더 X-Admin-Password가 맞을 때만 받는다 (틀리면 401). 비워 두면 잠그지 않는다 (개발용).
 
 대피 안내: evacuate가 되면 dispatch.plan으로 마커마다 출구 방향을 구해 대시보드에
-{"kind": "evac", "fire": 불난 마커 또는 null, "exits": [15], "arrows": [{"marker", "dir", "exit", "path"}, ...]}를 보내고,
+{"kind": "evac", "fire": 불난 마커 또는 null, "exits": [5, 8], "arrows": [{"marker", "dir", "exit", "path"}, ...]}를 보내고,
 마커와 보는 방향을 아는 로봇에는 guide(arrow)를 보낸다. normal로 돌아가면 대피 안내도 끝 (mode 메시지로 앎).
 
 출발은 서버 자동 (normal 모드일 때 1초마다): 빈 역할이 있으면 도크에서 쉬는 로봇 중 배터리가 가장 많은 로봇에 patrol.
