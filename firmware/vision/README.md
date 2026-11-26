@@ -35,6 +35,21 @@ python firmware/vision/view.py --wifi
 - 모듈(ESP32-S3)은 2.4GHz만 됩니다. 같은 공유기의 2.4GHz에 붙이면 5GHz에 붙은 Pi · PC와 같은 내부망이라 그대로 보입니다.
 - 모듈은 `patrol-cam`이라는 이름으로 알립니다(mDNS). 이름이 안 잡히면 `.env`에 `VISION_URL=http://<모듈 주소>/stream`을 적습니다.
 - 모듈은 `/stream`에 한 곳만 붙일 수 있습니다. 여러 사람이 볼 때는 Pi의 8090으로 봅니다. 팀원 모듈 여러 대를 같은 Wi-Fi에 붙이면 이름이 겹치니 `VISION_URL`에 주소를 적습니다.
+- USB를 뽑고(I2C 선 전원만) Wi-Fi 영상이 초당 1~2장으로 떨어지면 송신 세기를 낮춥니다. 모듈 USB 시리얼(115200)에 `TXP 34`를 보내면 8.5 dBm으로 저장됩니다(0.25 dBm 단위, 8~84, 기본 78 = 19.5 dBm). 2026-11-27: 19.5 dBm에서 초당 1.3장 · 핑 28~138 ms → 8.5 dBm에서 초당 9장 · 핑 11~30 ms. 최대 세기 송신 순간 전류를 I2C 전원이 못 대는 것으로 봅니다. `INFO`에 `rssi`(신호 세기)와 `txp`가 나옵니다.
+
+### Wi-Fi로 굽기 (USB 없이)
+
+모듈에 열쇠를 넣어 둔 뒤에는 USB 없이 Wi-Fi로 굽습니다. 열쇠가 없는 모듈은 Wi-Fi 굽기를 받지 않습니다.
+
+1. 모듈마다 한 번, USB 시리얼로 `OTAKEY <열쇠>`(32자까지)를 보내고 같은 값을 Pi `.env`의 `VISION_OTA_KEY`에 적습니다. `OTAKEY`만 보내면 지웁니다.
+2. 굽기: `view.py`를 먼저 끕니다(모듈 웹 서버는 한 번에 요청 하나라 영상을 받는 동안은 굽기가 시작되지 않음).
+
+```
+curl -H "X-Key: $VISION_OTA_KEY" --data-binary @firmware/vision/patrol_cam/build/patrol_cam.ino.bin http://patrol-cam.local/update
+```
+
+- 굽는 파일은 `build.py`가 만든 앱 파일 `patrol_cam/build/patrol_cam.ino.bin`입니다(저장소의 `patrol_cam.bin`은 0x0부터 굽는 통 파일이라 안 됨).
+- 새 펌웨어는 비어 있는 칸에 받고 검증이 끝나야 바꿔 켭니다. 중간에 끊기면 원래 펌웨어로 켜집니다. 1 MB에 약 10초, 끝나면 `ok`를 주고 다시 켜집니다. 저장해 둔 Wi-Fi · 기준 밝기 · 송신 세기 · 열쇠는 그대로입니다.
 
 ## 출발 전 카메라 각도 맞추기
 

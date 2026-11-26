@@ -6,13 +6,16 @@
 //   2. 영상 보내기 (켤 때만): USB 시리얼로 JPEG를 이어 보낸다. 찾은 선 상자와 구역 경계를 그려서 보냄.
 //      Wi-Fi를 저장해 두면 http://patrol-cam.local/stream (MJPEG)으로도 보낸다. 받는 쪽이 붙어 있는 동안만 만든다.
 // USB 시리얼 명령 (줄 단위): STREAM 1 / STREAM 0, THR <1~254> (검정 기준 밝기, 저장됨), INFO,
-//   SCAN (보이는 2.4GHz Wi-Fi 목록), WIFI <이름>\t<비밀번호> (저장하고 붙음, 이름 없이 WIFI면 지움)
+//   SCAN (보이는 2.4GHz Wi-Fi 목록), WIFI <이름>\t<비밀번호> (저장하고 붙음, 이름 없이 WIFI면 지움),
+//   TXP <0.25dBm 단위, 8~84> (Wi-Fi 송신 세기, 저장됨. USB 없이 I2C 전원만이면 낮춰야 덜 끊김),
+//   OTAKEY <열쇠, 32자까지> (저장됨. 있으면 Wi-Fi로 굽기 POST /update 받음, 이름 없이 OTAKEY면 지움)
 // 빌드·굽기는 firmware/vision/README.md
 #include <Arduino.h>
 #include <Wire.h>
 #include <Preferences.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
+#include <Update.h>
 #include "esp_http_server.h"
 #include "lwip/sockets.h"
 #include "esp_camera.h"
@@ -285,6 +288,42 @@ static esp_err_t streamHandler(httpd_req_t *req) {
   return ESP_FAIL;  // 끊김 (연결을 닫음)
 }
 
+// Wi-Fi로 굽기: POST /update (헤더 X-Key, 본문 = 앱 bin). 다른 칸에 받아 검증 뒤에만 바꾸니 중간에 끊겨도 원래대로 켜짐.
+// 열쇠(OTAKEY 명령, 저장됨)가 없으면 받지 않음. 웹 서버가 한 번에 요청 하나라 영상(/stream)을 닫아야 시작됨
+static char otaKey[33] = "";
+
+static esp_err_t updateHandler(httpd_req_t *req) {
+  char hdr[33] = "";
+  if (!otaKey[0] || httpd_req_get_hdr_value_str(req, "X-Key", hdr, sizeof(hdr)) != ESP_OK || strcmp(hdr, otaKey)) {
+    httpd_resp_send_err(req, HTTPD_403_FORBIDDEN, "key");
+    return ESP_FAIL;
+  }
+  if (!Update.begin(req->content_len)) {
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, Update.errorString());
+    return ESP_FAIL;
+  }
+  static uint8_t buf[4096];
+  int left = req->content_len, waits = 0;
+  while (left > 0) {
+    int r = httpd_req_recv(req, (char *)buf, min(left, (int)sizeof(buf)));
+    if (r == HTTPD_SOCK_ERR_TIMEOUT && ++waits < 6) continue;  // 약한 Wi-Fi에서 잠깐 멈추는 건 기다림 (5초 × 6)
+    if (r <= 0 || Update.write(buf, r) != (size_t)r) {
+      Update.abort();
+      httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "write");
+      return ESP_FAIL;
+    }
+    left -= r; waits = 0;
+  }
+  if (!Update.end(true)) {
+    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, Update.errorString());
+    return ESP_FAIL;
+  }
+  httpd_resp_sendstr(req, "ok");
+  delay(300);
+  ESP.restart();
+  return ESP_OK;
+}
+
 // 저장된 Wi-Fi로 붙고 /stream을 연다. 이름이 없으면 Wi-Fi를 끔
 static void startWifi() {
   String ssid = prefs.getString("ssid", ""), pass = prefs.getString("pass", "");
@@ -293,12 +332,18 @@ static void startWifi() {
   WiFi.setHostname(HOSTNAME);
   WiFi.setSleep(false);  // 절전 켜면 영상이 100 ms 넘게 밀림
   WiFi.begin(ssid.c_str(), pass.c_str());
+  WiFi.setTxPower((wifi_power_t)prefs.getChar("txp", WIFI_POWER_19_5dBm));
   if (httpd) return;
   httpd_config_t c = HTTPD_DEFAULT_CONFIG();
   c.core_id = 0;  // 선 찾기(코어 1)와 떨어뜨림
   httpd_uri_t u = {};
   u.uri = "/stream"; u.method = HTTP_GET; u.handler = streamHandler;
-  if (httpd_start(&httpd, &c) == ESP_OK) httpd_register_uri_handler(httpd, &u);
+  httpd_uri_t up = {};
+  up.uri = "/update"; up.method = HTTP_POST; up.handler = updateHandler;
+  if (httpd_start(&httpd, &c) == ESP_OK) {
+    httpd_register_uri_handler(httpd, &u);
+    httpd_register_uri_handler(httpd, &up);
+  }
 }
 
 static bool startCamera() {
@@ -327,6 +372,7 @@ void setup() {
   Serial.begin(BAUD);
   prefs.begin("patrolcam", false);
   thr = prefs.getUChar("thr", THR_DEFAULT);
+  prefs.getString("otakey", otaKey, sizeof(otaKey));
   bool cam = startCamera();
   shot = (uint16_t *)ps_malloc(W * H * 2);
   shotReady = xSemaphoreCreateBinary();
@@ -373,6 +419,12 @@ void loop() {
       WiFi.disconnect();
       mdns = false;
       startWifi();
+    } else if (line.startsWith("TXP ")) {
+      int v = line.substring(4).toInt();
+      if (v >= 8 && v <= 84) { prefs.putChar("txp", v); WiFi.setTxPower((wifi_power_t)v); }
+    } else if (line.startsWith("OTAKEY")) {  // 이름 없이 OTAKEY면 지움 (Wi-Fi 굽기 끔)
+      String v = line.length() > 7 ? line.substring(7) : "";
+      if (v.length() < sizeof(otaKey)) { prefs.putString("otakey", v); strcpy(otaKey, v.c_str()); }
     }
     if (line.length()) {  // 영상 중에도 JPEG 사이에 끼어 나감 (받는 쪽은 FFD8~FFD9만 잘라 씀)
       uint8_t a9[7];
@@ -381,8 +433,8 @@ void loop() {
       portEXIT_CRITICAL(&regLock);
       float fps = (frames - f0) * 1000.0 / max(1UL, millis() - t0);
       String wifi = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : prefs.getString("ssid", "").length() ? "connecting" : "off";
-      Serial.printf("\nINFO stream=%d thr=%d fps=%.1f a9=%d,%d,%d wifi=%s web=%d\n", streaming, thr, fps, a9[0], a9[1], a9[2],
-                    wifi.c_str(), webClients);
+      Serial.printf("\nINFO stream=%d thr=%d fps=%.1f a9=%d,%d,%d wifi=%s web=%d rssi=%d txp=%d\n", streaming, thr, fps, a9[0], a9[1], a9[2],
+                    wifi.c_str(), webClients, (int)WiFi.RSSI(), (int)WiFi.getTxPower());
       t0 = millis(); f0 = frames;
     }
     line = "";
