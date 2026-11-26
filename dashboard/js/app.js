@@ -2,7 +2,7 @@
 // 지도: 바탕(구역, 통로, 마커, 비상구, 충전 스테이션) 위에 화재 위치, 대피 화살표, (관리자 화면) 로봇 위치를 얹는다.
 
 import {
-  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, evacView,
+  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, evacView, loadHistory, alarmStats,
 } from "./store.js";
 import { connect, request } from "./conn.js";
 import { FakeServer } from "./fake.js";
@@ -14,10 +14,10 @@ const store = createStore();
 const params = new URLSearchParams(location.search);
 // 주소에 ?admin을 붙이면 관리자 화면. 서버가 잠가 두었으면 비밀번호를 물은 뒤에 연다 (README "관리자 잠금")
 const admin = params.has("admin");
-// ?fake면 가짜 서버. ?fake&lock이면 가짜 서버도 비밀번호(FAKE_PASSWORD)로 잠근다
+// ?fake면 가짜 서버. ?fake&lock이면 가짜 서버도 비밀번호(FAKE_PASSWORD)로 잠그고, ?fake&past면 지난 경보 40건을 미리 넣는다
 const FAKE_PASSWORD = "1234";
 const fakeServer = params.has("fake")
-  ? new FakeServer({ adminPassword: params.has("lock") ? FAKE_PASSWORD : null }).start()
+  ? new FakeServer({ adminPassword: params.has("lock") ? FAKE_PASSWORD : null, past: params.has("past") ? 40 : 0 }).start()
   : null;
 
 const STATUS_TEXT = { connecting: "연결 중", open: "연결됨", closed: "끊김" };
@@ -225,24 +225,103 @@ function renderAlerts() {
 }
 
 // ---------- 경보 이력 (관리자 화면) ----------
+// 지난 경보는 서버에서 꺼내 온다 (GET /events, PR #23). 처음에 PAST_PAGE건을 받아 정탐률을 세고,
+// 표에는 SHOW_STEP건씩 보여 준다. "더 보기"로 다 보면 서버에서 그 앞의 PAST_PAGE건을 더 받는다
+const PAST_PAGE = 500; // 서버가 한 번에 주는 최대 건수
+const SHOW_STEP = 50;
+// status: idle · loading · done · none(GET /events가 없는 예전 서버) · error
+const past = { status: "idle", more: false, shown: SHOW_STEP, error: null };
 let historyKey = "";
 
+async function loadPast(before = null) {
+  if (past.status === "loading") return;
+  past.status = "loading";
+  past.error = null;
+  render();
+  try {
+    const q = new URLSearchParams({ limit: String(PAST_PAGE) });
+    if (before != null) q.set("before", String(before));
+    const res = await conn.request(`/events?${q}`);
+    if (res.status === 404 || res.status === 405) {
+      past.status = "none";
+      return;
+    }
+    if (!res.ok) throw new Error(`서버 응답 ${res.status}`);
+    const list = await res.json();
+    loadHistory(store, list);
+    past.more = Array.isArray(list) && list.length === PAST_PAGE;
+    past.status = "done";
+  } catch (err) {
+    past.status = "error";
+    past.error = `지난 경보를 받지 못했습니다 (${err.message})`;
+  } finally {
+    render();
+  }
+}
+
+// 표에 더 보여 준다. 화면에 있는 것을 다 보여 줬고 서버에 더 있으면 그 앞을 받아 온다
+function showMore() {
+  past.shown += SHOW_STEP;
+  const all = alertHistory(store, Infinity);
+  if (past.shown > all.length && past.more) loadPast(Math.min(...all.map((h) => h.event.id)));
+  render();
+}
+
 function renderHistory(shown) {
-  const list = alertHistory(store);
-  const key = list.map((h) => `${h.event.id}${h.event.checked ? (h.event.false_alarm ? "f" : "c") : ""}`).join(",") + "|" + (shown?.id ?? "");
+  const all = alertHistory(store, Infinity);
+  const list = all.slice(0, past.shown);
+  const canMore = all.length > past.shown || past.more;
+  const key = list.map((h) => `${h.event.id}${h.event.checked ? (h.event.false_alarm ? "f" : "c") : ""}`).join(",") +
+    `|${shown?.id ?? ""}|${past.status}|${canMore}|${past.error ?? ""}`;
   if (key === historyKey) return;
   historyKey = key;
   document.getElementById("history").innerHTML = list.length
     ? list.map((h) => historyRow(h, shown && h.event.id === shown.id)).join("")
-    : `<tr><td colspan="7" class="empty">아직 받은 경보가 없습니다</td></tr>`;
+    : `<tr><td colspan="7" class="empty">${past.status === "loading" ? "지난 경보를 받는 중" : "아직 받은 경보가 없습니다"}</td></tr>`;
+  document.getElementById("history-sub").textContent = past.status === "none"
+    ? "이 화면을 연 뒤에 받은 경보 (서버가 지난 경보를 주지 않음)"
+    : "서버에 기록된 경보, 최근 것부터";
+  let more = "";
+  if (past.error) more += `<p class="error">${esc(past.error)}</p> <button type="button" class="more-btn" data-past-retry="1">다시 받기</button>`;
+  else if (past.status === "loading" && list.length) more += `<span class="muted">받는 중</span>`;
+  else if (canMore) more += `<button type="button" class="more-btn" data-more="1">더 보기</button>`;
+  document.getElementById("history-more").innerHTML = more;
+  renderStats();
+}
+
+// 정탐률 (닫은 경보 중 실제였던 비율). 화면이 가진 경보 이력만 센다
+let statsKey = "";
+function renderStats() {
+  const st = alarmStats(store);
+  const key = JSON.stringify(st);
+  if (key === statsKey) return;
+  statsKey = key;
+  const pct = (r) => (r.rate == null ? "-" : `${Math.round(r.rate * 100)}%`);
+  const row = (label, r) => `<tr><th scope="row">${esc(label)}</th><td>${pct(r)}</td>
+    <td class="muted">정탐 ${r.real} · 오탐 ${r.falseAlarm} / ${r.closed}건</td></tr>`;
+  document.getElementById("stats").innerHTML = `<table class="stat-table"><tbody>
+    ${row("전체", st.total)}${st.rows.map((r) => row(ALERT_TEXT[r.type]?.[0] ?? r.type, r)).join("")}
+  </tbody></table>
+  <p class="stat-note">정탐은 "경보 해제", 오탐은 "오탐"으로 해제한 것. 해제 전 경보와 로봇이 놓친 위험은 세지 않습니다. 경보 이력에 받아 온 경보 기준</p>`;
+}
+
+// 경보 시각: 오늘이면 시:분:초, 아니면 월.일 시:분
+function whenText(ts) {
+  const d = new Date(ts * 1000);
+  if (d.toDateString() === new Date().toDateString()) return clock(ts * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function historyRow(h, selected) {
   const e = h.event;
   const [label, cls] = ALERT_TEXT[e.type] ?? [e.type, ""];
-  const state = h.event.checked ? closedText(e) : "해제 전";
+  // 해제 시각은 서버가 알려 줄 때만 (checked_at, PR #23)
+  const state = h.event.checked
+    ? closedText(e) + (typeof e.checked_at === "number" ? ` <span>${whenText(e.checked_at)}</span>` : "")
+    : "해제 전";
   return `<tr class="${selected ? "selected" : ""}">
-    <td><button type="button" class="row-btn" data-alert="${e.id}" aria-pressed="${selected}">${e.ts ? clock(e.ts * 1000) : "-"}</button></td>
+    <td><button type="button" class="row-btn" data-alert="${e.id}" aria-pressed="${selected}">${e.ts ? whenText(e.ts) : "-"}</button></td>
     <td class="type ${cls}">${esc(label)}</td>
     <td>${esc(robotLabel(e.robot))}</td>
     <td>${h.role ? `${esc(h.role)} 경로` : "-"}</td>
@@ -558,7 +637,7 @@ function closeViewer() {
 
 function onClick(ev) {
   const t = ev.target.closest?.(
-    "[data-alert], [data-check], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel], [data-evac-mute], [data-photo], [data-viewer-close]",
+    "[data-alert], [data-check], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel], [data-evac-mute], [data-photo], [data-viewer-close], [data-more], [data-past-retry]",
   );
   if (!t) return;
   if (t.dataset.photo) {
@@ -566,6 +645,11 @@ function onClick(ev) {
     openViewer(t.dataset.photo);
   } else if (t.dataset.viewerClose) {
     closeViewer();
+  } else if (t.dataset.more) {
+    showMore();
+  } else if (t.dataset.pastRetry) {
+    const all = alertHistory(store, Infinity);
+    loadPast(past.more && all.length ? Math.min(...all.map((h) => h.event.id)) : null);
   } else if (t.dataset.alert) {
     detail.selected = Number(t.dataset.alert);
     alertState.blink.delete(detail.selected); // 눌러서 봤으면 깜빡임을 멈춘다
@@ -729,6 +813,7 @@ if (admin) {
   document.getElementById("robot-panel").hidden = false;
   document.getElementById("detail-panel").hidden = false;
   document.getElementById("history-panel").hidden = false;
+  document.getElementById("stats-panel").hidden = false;
   document.getElementById("sound").hidden = false;
   renderSoundButton();
   document.addEventListener("click", onClick);
@@ -753,6 +838,8 @@ const conn = connect({
   onStatus: (status) => {
     setServer(store, status);
     if (status === "open" && alertState.openedAt == null) alertState.openedAt = Date.now();
+    // 관리자 화면: 서버에 붙을 때마다(다시 붙을 때도) 지난 경보 첫 쪽을 다시 받아 끊긴 동안 해제된 것까지 맞춘다
+    if (status === "open" && admin && past.status !== "none") loadPast();
     render();
   },
 });

@@ -46,13 +46,14 @@
   </section>
 
   <section class="panel history-panel" id="history-panel" aria-label="경보 이력" hidden>
-    <h2>경보 이력 <span class="sub">이 화면을 연 뒤에 받은 경보. 새로고침하면 해제된 것은 사라집니다</span></h2>
+    <h2>경보 이력 <span class="sub" id="history-sub">서버에 기록된 경보, 최근 것부터</span></h2>
     <div class="table-wrap">
       <table class="history">
         <thead><tr><th>시각</th><th>종류</th><th>로봇</th><th>경로</th><th>위치</th><th>해제</th><th>사진</th></tr></thead>
         <tbody id="history"></tbody>
       </table>
     </div>
+    <div class="history-more" id="history-more"></div>
   </section>
 
   <aside class="side">
@@ -82,6 +83,11 @@
     <section class="panel" aria-label="최근 경보">
       <h2>최근 경보</h2>
       <ul class="alerts" id="alerts"></ul>
+    </section>
+
+    <section class="panel stats-panel" id="stats-panel" aria-label="정탐률" hidden>
+      <h2>정탐률 <span class="sub">정탐 ÷ 해제한 경보</span></h2>
+      <div id="stats"></div>
     </section>
   </aside>
 </div>

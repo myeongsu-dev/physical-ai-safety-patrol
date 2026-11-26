@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN, RETURN_POINT, EXITS } from "./js/mapdata.js";
 import { FakeServer, EVENT_TYPES, evacPlan } from "./js/fake.js";
-import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, evacView, ONLINE_SEC } from "./js/store.js";
+import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, evacView, loadHistory, alarmStats, ONLINE_SEC } from "./js/store.js";
 import { robotLayer, fireLayer, guideLayer, corridorPoints, MARKER_POS } from "./js/map.js";
 import { checkAdmin, withPassword, ADMIN_HEADER } from "./js/auth.js";
 
@@ -660,7 +660,7 @@ class FakeAudioContext {
   assert.match(el("history").innerHTML, /A 경로/);
   await app.click({ check: String(fire.id) });
   await tickWait();
-  assert.match(el("history").innerHTML, /<td class="state done">경보 해제<\/td>/);
+  assert.match(el("history").innerHTML, /<td class="state done">경보 해제 <span>\d\d:\d\d:\d\d<\/span><\/td>/);
   assert.ok(!el("alerts").innerHTML.includes(`data-alert="${fire.id}"`)); // 최근 경보에서는 빠짐
   await app.click({ alert: String(fire.id) });
   const d = el("detail").innerHTML;
@@ -785,7 +785,7 @@ class FakeAudioContext {
   const sent = fake.events.find((x) => x.id === ob.id);
   assert.equal(sent.checked, true);
   assert.equal(sent.false_alarm, true);
-  assert.match(el("history").innerHTML, /<td class="state done false-alarm">오탐으로 해제<\/td>/);
+  assert.match(el("history").innerHTML, /<td class="state done false-alarm">오탐으로 해제 <span>\d\d:\d\d:\d\d<\/span><\/td>/);
   await app.click({ alert: String(ob.id) });
   assert.match(el("detail").innerHTML, /<p class="done-text">오탐으로 해제<\/p>/);
   // 정탐은 그대로 "경보 해제"
@@ -794,8 +794,105 @@ class FakeAudioContext {
   await app.click({ check: String(ob2.id) });
   await tickWait();
   assert.equal(fake.events.find((x) => x.id === ob2.id).false_alarm, false);
-  assert.match(el("history").innerHTML, /<td class="state done">경보 해제<\/td>/);
+  assert.match(el("history").innerHTML, /<td class="state done">경보 해제 <span>\d\d:\d\d:\d\d<\/span><\/td>/);
   app.stop();
+}
+
+// ---------- 지난 경보 목록과 정탐률 (PR #23: GET /events) ----------
+{
+  // 합치기: 지난 경보는 이력에만, 해제 안 된 목록(events)은 그대로. 이미 해제로 받은 것은 되돌리지 않음
+  const st = createStore();
+  apply(st, { kind: "event", id: 5, robot: "A", type: "heat", checked: false });
+  apply(st, { kind: "event", id: 5, robot: "A", type: "heat", checked: true, checked_at: 200, false_alarm: true });
+  loadHistory(st, [
+    { kind: "event", id: 5, robot: "A", type: "heat", checked: false, checked_at: null, false_alarm: null },
+    { kind: "event", id: 4, robot: "B", type: "obstacle", checked: true, checked_at: 100, false_alarm: false },
+    { kind: "event", id: 3, robot: "C", type: "obstacle", checked: true, checked_at: 90, false_alarm: true },
+    { kind: "event", id: 2, robot: "D", type: "helmet", checked: true, false_alarm: true },
+    { kind: "event", id: 1, robot: "A", type: "flame", checked: false, false_alarm: null },
+    { id: "x" }, null,
+  ]);
+  assert.equal(st.events.size, 0, "지난 경보는 해제 안 된 목록에 넣지 않음");
+  assert.equal(st.history.get(5).event.checked, true);
+  assert.equal(st.history.get(5).event.false_alarm, true);
+  assert.equal(st.history.get(4).role, null);
+  assert.equal(st.history.size, 5);
+  loadHistory(st, "nope");
+
+  // 정탐률: 해제한 것만, 안전모 미착용 빼고
+  const { rows, total } = alarmStats(st);
+  const ob = rows.find((r) => r.type === "obstacle");
+  assert.deepEqual([ob.closed, ob.falseAlarm, ob.real, ob.rate], [2, 1, 1, 0.5]);
+  const heat = rows.find((r) => r.type === "heat");
+  assert.deepEqual([heat.closed, heat.real, heat.rate], [1, 0, 0]);
+  assert.equal(rows.find((r) => r.type === "flame").rate, null, "해제한 게 없으면 null");
+  assert.deepEqual([total.closed, total.falseAlarm, total.real], [3, 2, 1]);
+  assert.ok(!rows.some((r) => r.type === "helmet"));
+
+  // 가짜 서버 GET /events: 최근 것부터, limit · before · type
+  const f = new FakeServer({ seed: 5, past: 30, defer: (fn) => fn() });
+  const get = async (q) => (await f.fetch(`/events${q}`)).json();
+  const first = await get("?limit=10");
+  assert.equal(first.length, 10);
+  assert.deepEqual(first.map((e) => e.id), [30, 29, 28, 27, 26, 25, 24, 23, 22, 21]);
+  assert.ok(first.every((e) => e.checked && typeof e.false_alarm === "boolean" && e.checked_at > e.ts));
+  assert.equal((await get("?limit=10&before=5")).length, 4);
+  assert.ok((await get("?type=heat")).every((e) => e.type === "heat"));
+  assert.equal((await get("")).length, 30);
+  assert.equal(f._openEvents().length, 0, "지난 경보는 붙자마자 받는 묶음에 없음");
+
+  // 화면: 관리자 화면을 열면 지난 경보를 받아 이력과 정탐률을 보여 주고, 50건씩 더 보기
+  const app = await bootApp("?fake&admin&past", "past");
+  const { el, fake } = app;
+  await tickWait(20);
+  assert.equal(el("history-sub").textContent, "서버에 기록된 경보, 최근 것부터");
+  const rowsShown = () => (el("history").innerHTML.match(/<tr /g) || []).length;
+  const want = fake.events.filter((e) => e.type !== "helmet").length;
+  assert.equal(rowsShown(), Math.min(50, want));
+  assert.equal(el("stats-panel").hidden, false);
+  assert.match(el("stats").innerHTML, /<th scope="row">전체<\/th>/);
+  assert.match(el("stats").innerHTML, /<th scope="row">통로 차단<\/th>/);
+  // 지난 경보가 50건 안 되면 더 보기 없음 (가짜는 40건 중 안전모 빼고)
+  if (want <= 50) assert.equal(el("history-more").innerHTML, "");
+  // 오탐으로 해제하면 정탐률에 바로 들어감
+  const before = alarmStats({ history: new Map(fake.events.map((e) => [e.id, { event: e }])) }).total.closed;
+  const ob2 = fake.emit("obstacle", "A");
+  await tickWait();
+  await app.click({ check: String(ob2.id), falseAlarm: "1" });
+  await tickWait();
+  const totalText = el("stats").innerHTML.match(/<th scope="row">전체<\/th><td>[^<]*<\/td>\s*<td class="muted">정탐 (\d+) · 오탐 (\d+) \/ (\d+)건/);
+  assert.equal(Number(totalText[3]), before + 1);
+  assert.equal(Number(totalText[1]) + Number(totalText[2]), Number(totalText[3]), "정탐 + 오탐 = 해제");
+  app.stop();
+
+  // 더 보기: 50건 넘으면 버튼, 누르면 50건 더 (가짜 서버가 120건)
+  {
+    const app2 = await bootApp("?fake&admin", "more");
+    const f2 = app2.fake;
+    f2._seedPast(120);
+    await app2.click({ pastRetry: "1" }); // 다시 받기와 같은 길로 첫 쪽을 다시 받음
+    await tickWait(20);
+    const n = f2.events.filter((e) => e.type !== "helmet").length;
+    assert.equal((app2.el("history").innerHTML.match(/<tr /g) || []).length, 50);
+    assert.match(app2.el("history-more").innerHTML, /data-more="1">더 보기/);
+    await app2.click({ more: "1" });
+    await tickWait(20);
+    assert.equal((app2.el("history").innerHTML.match(/<tr /g) || []).length, Math.min(100, n));
+    app2.stop();
+  }
+
+  // GET /events가 없는 예전 서버(404): 이 화면을 연 뒤 받은 경보만, 안내 글
+  {
+    const app3 = await bootApp("?fake&admin", "old");
+    const f3 = app3.fake;
+    const orig = f3.fetch.bind(f3);
+    f3.fetch = async (path, opts) => (/^\/events(\?|$)/.test(path) ? { ok: false, status: 404, json: async () => ({}) } : orig(path, opts));
+    await app3.click({ pastRetry: "1" });
+    await tickWait(20);
+    assert.match(app3.el("history-sub").textContent, /서버가 지난 경보를 주지 않음/);
+    assert.equal(app3.el("history-more").innerHTML, "");
+    app3.stop();
+  }
 }
 
 // 경보 이력: 해제된 경보도 남는다. 해제 시각은 두지 않는다

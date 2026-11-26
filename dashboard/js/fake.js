@@ -4,6 +4,8 @@
 //   - fake.socket()  : new WebSocket(".../ws") 대신. onopen · onmessage · onclose · close()
 //                      붙자마자 로봇 state 전부, mode, 해제 안 된 경보를 보내고, 그 뒤로 새 메시지
 //   - fake.fetch()   : fetch() 대신. POST /events/{id}/check (body {"false_alarm": true}면 오탐), POST /mode, GET /status, GET /admin/check
+//                      GET /events?limit=50&before=id&type=heat: 지난 경보 (닫힌 것 포함), 최근 것부터
+//                      new FakeServer({ past: 40 })면 지난 경보 40건(닫힘, 일부 오탐)을 미리 넣어 둔다
 //                      new FakeServer({ adminPassword: "1234" })면 진짜 서버의 관리자 잠금처럼
 //                      경보 해제·모드 변경은 헤더 X-Admin-Password가 맞아야 받는다 (틀리면 401)
 //
@@ -248,7 +250,7 @@ class FakeSocket {
 
 export class FakeServer {
   // seed: 같은 값이면 같은 움직임. defer: 소켓 콜백을 미루는 방법 (시험에서 바꿔 끼움)
-  constructor({ seed = Date.now(), defer = (fn) => setTimeout(fn, 0), adminPassword = null } = {}) {
+  constructor({ seed = Date.now(), defer = (fn) => setTimeout(fn, 0), adminPassword = null, past = 0 } = {}) {
     this.adminPassword = adminPassword || null; // 없으면 잠그지 않음 (진짜 서버도 같음)
     this.rng = makeRng(seed);
     this.defer = defer;
@@ -263,6 +265,7 @@ export class FakeServer {
       C: new FakeRobot("C", { battery: 100, role: null, rng: this.rng }),
       D: new FakeRobot("D", { battery: 40, role: null, rng: this.rng }),
     };
+    if (past > 0) this._seedPast(past);
   }
 
   // 1초마다 tick. 브라우저에서 쓸 때 부른다
@@ -302,6 +305,19 @@ export class FakeServer {
       return admin ? jsonResponse(200, { ok: true }) : jsonResponse(401, { detail: "관리자 비밀번호가 틀림" });
     }
     if (locked && !admin) return jsonResponse(401, { detail: "관리자 비밀번호가 틀림" });
+
+    if (method === "GET" && /^\/events(\?|$)/.test(path)) {
+      const q = new URL(path, "http://fake").searchParams;
+      const limit = Math.max(1, Math.min(Number(q.get("limit")) || 50, 500));
+      const before = q.has("before") ? Number(q.get("before")) : null;
+      const type = q.get("type");
+      const list = this.events
+        .filter((e) => (before == null || e.id < before) && (!type || e.type === type))
+        .sort((a, b) => b.id - a.id)
+        .slice(0, limit)
+        .map((e) => ({ ...e }));
+      return jsonResponse(200, list);
+    }
 
     let m = path.match(/^\/events\/(\d+)\/check$/);
     if (m && method === "POST") {
@@ -405,6 +421,35 @@ export class FakeServer {
     this.events.push(e);
     this._push({ ...e });
     return e;
+  }
+
+  // 지난 경보 n건: 지난 하루에 걸쳐, 모두 닫혔고 일부는 오탐. 화면에 보내지는 않는다 (GET /events로만 보임)
+  _seedPast(n) {
+    const types = ["obstacle", "obstacle", "floor_object", "heat", "heat", "flame", "helmet"];
+    const falseRate = { obstacle: 0.15, floor_object: 0.35, heat: 0.3, flame: 0.2, helmet: 0.25 };
+    const names = Object.keys(this.robots);
+    const now = Math.floor(Date.now() / 1000);
+    for (let i = 0; i < n; i++) {
+      const type = types[Math.floor(this.rng() * types.length)];
+      const ts = now - Math.floor(((n - i) / n) * 86400) - 600;
+      const fields = type === "obstacle" ? { sonar_cm: 12, person: this.rng() < 0.3 }
+        : type === "heat" ? { temp_c: 46.2, flame: false, conf: 0.0 }
+        : type === "flame" ? { temp_c: 63.5, flame: true, conf: 0.86 }
+        : { conf: 0.74 };
+      this.events.push({
+        kind: "event",
+        id: this.nextId++,
+        robot: names[Math.floor(this.rng() * names.length)],
+        type,
+        ts,
+        marker: 1 + Math.floor(this.rng() * 14),
+        photo: null,
+        ...fields,
+        checked: true,
+        checked_at: ts + 60 + Math.floor(this.rng() * 600),
+        false_alarm: this.rng() < falseRate[type],
+      });
+    }
   }
 
   _pickRobot() {

@@ -462,3 +462,29 @@ ul { list-style: none; margin: 0; padding: 0; }
 .check-row .check { width: auto; flex: 2 1 0; }
 .check-row .check.false-alarm { flex: 1 1 0; background: var(--panel); color: var(--text); }
 .check-row .check.false-alarm:hover { background: var(--bg); }
+
+/* ---------- 정탐률, 경보 이력 더 보기 (관리자 화면) ---------- */
+/* 정탐률: 오른쪽 칸 맨 아래, 작은 글씨 (참고용 정보) */
+.stats-panel h2 { font-size: 14px; }
+.stat-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.stat-table th, .stat-table td { padding: 3px 0; text-align: left; font-weight: 400; }
+.stat-table th { color: var(--muted); }
+.stat-table td:nth-child(2) { width: 48px; text-align: right; padding-right: 10px; }
+.stat-table td.muted { font-size: 12px; }
+.stat-table tr:first-child th, .stat-table tr:first-child td:nth-child(2) { color: var(--text); font-weight: 600; }
+.stat-note { margin: var(--gap) 0 0; color: var(--muted); font-size: 12px; }
+.history-more { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap); margin-top: var(--gap); }
+.history-more:empty { display: none; }
+.history-more .error { margin: 0; }
+.more-btn {
+  font: inherit;
+  font-size: 14px;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.more-btn:hover { background: var(--bg); }
+.more-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }

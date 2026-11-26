@@ -30,7 +30,7 @@ export function createStore() {
     evac: null,
     events: new Map(), // id → 해제 안 된 경보
     // 경보 이력: id → { event, role }. 해제된 경보도 남긴다 (event.checked).
-    // 서버에 지난 경보를 꺼내 주는 요청이 아직 없어서, 이 화면을 연 뒤에 받은 경보만 남는다
+    // 이 화면을 연 뒤에 받은 경보 + 서버에서 꺼내 온 지난 경보(GET /events, loadHistory)
     history: new Map(),
   };
 }
@@ -72,7 +72,7 @@ export function apply(store, msg, now = Date.now()) {
   }
 }
 
-export const HISTORY_MAX = 200;
+export const HISTORY_MAX = 2000; // 화면이 들고 있는 경보 이력 최대 건수 (넘으면 오래된 것부터 뺌)
 
 function remember(store, msg) {
   const prev = store.history.get(msg.id);
@@ -84,6 +84,51 @@ function remember(store, msg) {
   while (store.history.size > HISTORY_MAX) {
     store.history.delete(Math.min(...store.history.keys()));
   }
+}
+
+// 서버에서 꺼내 온 지난 경보(GET /events)를 경보 이력에 합친다. 해제 안 된 경보 목록(events)은 건드리지 않는다
+// (WebSocket이 붙자마자 보내 줌). 지난 경보는 받은 때의 경로를 모르니 role은 null.
+// 이미 해제로 받은 경보를 예전 값(해제 전)으로 되돌리지 않는다
+export function loadHistory(store, list) {
+  if (!Array.isArray(list)) return;
+  for (const e of list) {
+    if (!e || typeof e.id !== "number") continue;
+    const prev = store.history.get(e.id);
+    const keep = prev?.event.checked && !e.checked;
+    store.history.set(e.id, {
+      event: keep ? { ...e, ...pick(prev.event, ["checked", "checked_at", "false_alarm"]) } : { ...(prev?.event ?? {}), ...e },
+      role: prev?.role ?? null,
+    });
+  }
+  while (store.history.size > HISTORY_MAX) {
+    store.history.delete(Math.min(...store.history.keys()));
+  }
+}
+
+function pick(o, keys) {
+  return Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]]));
+}
+
+// 정탐률: 해제한 경보 중 실제였던(오탐이 아닌) 비율. 경보 종류별과 전체.
+// 로봇이 놓친 위험은 경보가 없어서 셀 수 없다. 그래서 "정확도"가 아니라 정탐률이다.
+// 화면이 가진 경보 이력(서버에서 꺼내 온 것 포함)만 센다. 안전모 미착용은 뺀다 (화면 표시 미정)
+export const STAT_TYPES = ["obstacle", "floor_object", "heat", "flame"];
+export function alarmStats(store) {
+  const rows = Object.fromEntries(STAT_TYPES.map((t) => [t, { type: t, closed: 0, falseAlarm: 0 }]));
+  for (const { event: e } of store.history.values()) {
+    if (!e.checked || !rows[e.type]) continue;
+    rows[e.type].closed += 1;
+    if (e.false_alarm === true) rows[e.type].falseAlarm += 1;
+  }
+  const list = STAT_TYPES.map((t) => withRate(rows[t]));
+  const total = withRate(list.reduce((a, r) => ({ ...a, closed: a.closed + r.closed, falseAlarm: a.falseAlarm + r.falseAlarm }),
+    { type: "all", closed: 0, falseAlarm: 0 }));
+  return { rows: list, total };
+}
+
+function withRate(r) {
+  const real = r.closed - r.falseAlarm;
+  return { ...r, real, rate: r.closed ? real / r.closed : null };
 }
 
 // 경보 이력, 새것부터. 안전모 미착용은 뺀다 (openAlerts와 같은 기준)
