@@ -53,10 +53,13 @@ static const int DATA_PINS[8] = {11, 9, 8, 10, 12, 18, 17, 16};  // Y2..Y9
 // 고른 검정 띠의 평균 밝기가 구역에서 가장 밝은 값의 이 비율(%)보다 밝으면 그림자 (테이프 20~39%, 그림자 62%:
 // T19 2026-11-26 그늘 속 바닥 이음매를 선으로 잡아 엉뚱한 쪽으로 감). 가장 어두운 값만 보면 이음매(81)가 DARK_MAX를 통과함
 #define DARK_RATIO 50
-// 아래 구역부터 이어서 찾기: 각 구역은 기준 x(아래 구역은 바로 전 장의 아래 구역, 가운데는 아래, 위는 가운데)에
-// 가장 가까운 띠를 고르고, 그 거리가 이보다 멀면 못 찾음. 화면에 다른 트랙이 같이 보여도 넘어가지 않게
-// (2026-11-26 36초 주행: 가장 굵은 띠를 고르다 돌던 중 옆 트랙을 잡음). 기준이 없으면 가장 굵은 띠
+// 아래 구역부터 이어서 찾기: 각 구역은 기준 띠(아래 구역은 바로 전 장의 아래 구역 x, 가운데는 아래 띠, 위는 가운데 띠)와
+// 가로 범위가 가장 가까운 띠를 고르고, 떨어진 거리가 한도보다 멀면 못 찾음. 화면에 다른 트랙이 같이 보여도 넘어가지 않게
+// (2026-11-26 36초 주행: 가장 굵은 띠를 고르다 돌던 중 옆 트랙을 잡음). 기준이 없으면 가장 굵은 띠.
+// 바로 아래 구역 띠와는 가로 범위가 겹치거나 TOUCH_GAP 안이면 이어진 것: 가운데끼리 거리로 보면 U자에서 위 구역 테이프가
+// 옆으로 누워 띠 가운데가 40칸 넘게 비켜나 버렸음(2026-11-27 주행 영상 89~90장). 한 구역 건너(아래 → 위)나 지난 장과는 JUMP_MAX
 #define JUMP_MAX 40
+#define TOUCH_GAP 6
 #define NEAR_KEEP 15  // 아래 구역을 이만큼(장) 놓쳐도 마지막 위치를 기준으로 씀 (약 0.5초)
 #define TRIO_REG 0xB0  // 이 레지스터를 읽으면 위 · 가운데 · 아래 구역 7바이트씩 21바이트 (가운데는 아래로 바꾸기 전 값)
 
@@ -112,7 +115,7 @@ static inline uint8_t luma(uint16_t c) {
 // 구역 하나에서 가장 굵은 검정 띠를 찾아 out[7]에 채움 (못 찾으면 0)
 // 검정 기준은 구역의 가장 어두운·밝은 밝기의 중간 (thr는 상한). 조명이 바뀌면 고정값으로는 바닥까지 검정이 됨
 // (2026-11-26 해 질 녘: 테이프 없는 바닥을 폭 전체로 잡아 x=79로 직진). 차이가 CONTRAST_MIN보다 작으면 바닥뿐 → 못 찾음
-static void findLine(const uint8_t *buf, int band, int ref, uint8_t out[7]) {
+static void findLine(const uint8_t *buf, int band, int rx1, int rx2, int gapMax, uint8_t out[7]) {
   uint8_t cnt[SW], top[SW], bot[SW];
   uint16_t sv[SW];  // 열마다 검정 칸 밝기 합 (최대 40 x 255)
   int y0 = band * BAND, y1 = y0 + BAND;
@@ -125,7 +128,8 @@ static void findLine(const uint8_t *buf, int band, int ref, uint8_t out[7]) {
     }
   memset(out, 0, 7);
   if (hi - lo < CONTRAST_MIN || lo > DARK_MAX) return;
-  uint8_t t = min((int)thr, (lo + hi) / 2);
+  // 어두운 쪽 40%: 가운데(50%)는 테이프 가장자리 흐림 · 그림자(84~149, 테이프 약 50 · 바닥 약 220)까지 잡아 띠 가운데가 쏠렸음
+  uint8_t t = min((int)thr, lo + (hi - lo) * 2 / 5);
   for (int x = 0; x < SW; x++) {
     cnt[x] = 0; top[x] = 255; bot[x] = 0; sv[x] = 0;
     for (int y = y0; y < y1; y++) {
@@ -138,8 +142,9 @@ static void findLine(const uint8_t *buf, int band, int ref, uint8_t out[7]) {
       }
     }
   }
-  // 후보 열이 이어진 구간(한 칸 끊김은 이어 봄) 중: 기준 x가 있으면 가운데가 가장 가까운 것, 없으면 검정 칸 합이 가장 큰 것
-  int best = 0, bx1 = 0, bx2 = 0, bd = 9999, x = 0;
+  // 후보 열이 이어진 구간(한 칸 끊김은 이어 봄) 중: 기준 띠가 있으면 가로로 가장 가까운 것(같으면 가운데가 가까운 것),
+  // 없으면 검정 칸 합이 가장 큰 것
+  int best = 0, bx1 = 0, bx2 = 0, bd = 9999, bg = 9999, x = 0;
   while (x < SW) {
     if (cnt[x] < COL_MIN) { x++; continue; }
     int s = x, sum = 0, gap = 0, e = x;
@@ -148,10 +153,11 @@ static void findLine(const uint8_t *buf, int band, int ref, uint8_t out[7]) {
       else if (++gap > 1) break;
     }
     if (sum < AREA_MIN || sum > AREA_MAX) continue;
-    int d = ref < 0 ? -sum : abs((s + e) / 2 - ref);
-    if (d < bd) { bd = d; best = sum; bx1 = s; bx2 = e; }
+    int g = rx1 < 0 ? 0 : max(0, max(s - rx2, rx1 - e));
+    int d = rx1 < 0 ? -sum : g * SW + abs((s + e) / 2 - (rx1 + rx2) / 2);
+    if (d < bd) { bd = d; bg = g; best = sum; bx1 = s; bx2 = e; }
   }
-  if (!best || (ref >= 0 && bd > JUMP_MAX)) return;
+  if (!best || (rx1 >= 0 && bg > gapMax)) return;
   uint8_t ty = 255, by = 0;
   uint32_t dsum = 0, dn = 0;
   for (int i = bx1; i <= bx2; i++) {
@@ -192,10 +198,13 @@ static void detectTask(void *) {
     if (!fb) { delay(10); continue; }
     flipRows(fb->buf);  // 이제 화면 위 = 로봇에서 먼 쪽 (0xA8 = 먼 구역)
     // 아래(발 바로 앞) → 가운데 → 위 순서로, 바로 아래 구역 위치에서 이어지는 띠만 (JUMP_MAX)
-    findLine(fb->buf, 2, nearMiss < NEAR_KEEP ? nearX : -1, aa);
+    int k = nearMiss < NEAR_KEEP ? nearX : -1;
+    findLine(fb->buf, 2, k, k, JUMP_MAX, aa);
     if (aa[0]) { nearX = aa[1]; nearMiss = 0; } else if (nearMiss < 255) nearMiss++;
-    findLine(fb->buf, 1, aa[0] ? aa[1] : -1, a9);
-    findLine(fb->buf, 0, a9[0] ? a9[1] : aa[0] ? aa[1] : -1, a8);
+    if (aa[0]) findLine(fb->buf, 1, aa[3], aa[5], TOUCH_GAP, a9); else findLine(fb->buf, 1, -1, -1, 0, a9);
+    if (a9[0]) findLine(fb->buf, 0, a9[3], a9[5], TOUCH_GAP, a8);
+    else if (aa[0]) findLine(fb->buf, 0, aa[3], aa[5], JUMP_MAX, a8);
+    else findLine(fb->buf, 0, -1, -1, 0, a8);
     portENTER_CRITICAL(&regLock);
     memcpy(trio, a8, 7); memcpy(trio + 7, a9, 7); memcpy(trio + 14, aa, 7);
     if (!a9[0]) memcpy(a9, aa, 7);  // Hiwonder 형식(0xA9): 가운데에서 놓치면 아래 구역. 중심 y(80~119)로 구분
