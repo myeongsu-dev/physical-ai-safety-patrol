@@ -95,6 +95,12 @@ def c_dog(a):
     v = _read(link, st, 2.0, show, lambda p: p[0] == "V" and len(p) >= 2)   # 보낸 줄이 그대로 돌아온 "V"(REPL 에코)는 답이 아님
     ok &= _verdict(v is not None and st.version is not None, f"V 응답: 버전 {st.version}, 명령 {st.commands}, 숫자 채널 {st.board_chans}, "
                                   f"이벤트 {sorted(st.event_chans)}")
+    if st.version:  # firmware/dog/upload.py가 붙인 +해시와 이 저장소 main.py 비교 (같은 계산)
+        import hashlib
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware", "dog", "main.py"), "rb") as f:
+            src = f.read()
+        mine = hashlib.sha1(src.replace(b"\r\n", b"\n")).hexdigest()[:6]
+        print(f"      보드 코드: {'이 저장소 main.py와 같음' if st.version.endswith('+' + mine) else '이 저장소 main.py와 다름'} (저장소 +{mine})")
     if v is None and n["echo"]:
         print("      보낸 줄이 그대로 돌아옴 → 보드가 MicroPython REPL(>>>)에 있고 main.py가 안 돎. firmware/dog/README.md로 main.py 올리기")
     if v and st.commands is not None:
