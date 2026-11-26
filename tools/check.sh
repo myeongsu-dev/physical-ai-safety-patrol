@@ -10,3 +10,4 @@ node tools/mechdog-test/app/selfcheck.mjs
 python tools/pi-power-test/power_test.py selfcheck
 python -m pip install -q -r server/requirements.txt
 python tools/integration-test/itest.py --selfcheck
+python -c "import ast, glob; [ast.parse(open(f, encoding=\"utf-8\").read(), f) for f in glob.glob(\"tools/drive-test/*.py\")]"  # 로봇이 있어야 도는 도구라 문법만
