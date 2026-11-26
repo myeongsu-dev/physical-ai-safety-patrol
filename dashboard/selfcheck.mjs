@@ -11,6 +11,7 @@ import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN, RETURN_POINT, EXITS } fro
 import { FakeServer, EVENT_TYPES, evacPlan } from "./js/fake.js";
 import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, evacView, ONLINE_SEC } from "./js/store.js";
 import { robotLayer, fireLayer, guideLayer, corridorPoints, MARKER_POS } from "./js/map.js";
+import { checkAdmin, withPassword, ADMIN_HEADER } from "./js/auth.js";
 
 // ---------- 1) 지도 데이터 ----------
 function readMapConfig() {
@@ -345,7 +346,8 @@ const realSetInterval = globalThis.setInterval;
 const tickWait = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 
 // search: 주소 뒤 ?… 부분. 같은 app.js를 두 번 띄우려고 import 주소에 tag를 붙인다
-async function bootApp(search, tag) {
+// login: 관리자 잠금 시험용. app.js가 비밀번호를 기다리는 동안 부른다 (el을 받음)
+async function bootApp(search, tag, { login } = {}) {
   const els = {};
   const el = (id) =>
     (els[id] ??= {
@@ -362,7 +364,9 @@ async function bootApp(search, tag) {
   globalThis.location = { search, protocol: "http:", host: "localhost" };
   globalThis.window = globalThis;
   globalThis.setInterval = (fn, ms) => { const t = realSetInterval(fn, ms); timers.push(t); return t; };
-  await import(`./js/app.js?${tag}`);
+  const loading = import(`./js/app.js?${tag}`);
+  if (login) await login(el);
+  await loading;
   await tickWait(20); // 가짜 소켓이 열리고 첫 묶음이 오기까지
   const fakeServer = globalThis.fake;
   return {
@@ -660,6 +664,85 @@ class FakeAudioContext {
   assert.match(d, /<p class="done-text">경보 해제<\/p>/);
   assert.ok(!d.includes("data-check"));
   assert.match(d, /<dt>경로<\/dt><dd>A 경로<\/dd>/);
+  app.stop();
+}
+
+// ---------- 관리자 잠금 (server/api.py, PR #23) ----------
+{
+  // 서버에 묻기: 맞음, 틀림, 잠금 없는 예전 서버(404), 그 밖
+  const answer = (status) => async () => ({ ok: status === 200, status });
+  assert.equal(await checkAdmin(answer(200), "x"), "ok");
+  assert.equal(await checkAdmin(answer(401), "x"), "wrong");
+  assert.equal(await checkAdmin(answer(404), ""), "ok", "/admin/check가 없는 서버는 잠금 없음");
+  assert.equal(await checkAdmin(answer(500), "x"), "error");
+  assert.equal(await checkAdmin(async () => { throw new Error("끊김"); }, "x"), "error");
+  let sent = null;
+  await checkAdmin(async (path, opts) => { sent = { path, opts }; return { ok: true, status: 200 }; }, "pw");
+  assert.deepEqual(sent, { path: "/admin/check", opts: { headers: { [ADMIN_HEADER]: "pw" } } });
+  assert.deepEqual(withPassword({ method: "POST", headers: { "Content-Type": "application/json" } }, "pw").headers,
+    { "Content-Type": "application/json", [ADMIN_HEADER]: "pw" });
+  assert.deepEqual(withPassword({ method: "POST" }, ""), { method: "POST" }, "비밀번호가 없으면 헤더 안 붙임");
+
+  // 가짜 서버도 진짜 서버처럼: 바꾸는 요청만 잠그고 보기는 열어 둠
+  const locked = new FakeServer({ seed: 1, adminPassword: "pw", defer: (fn) => fn() });
+  const ok = { headers: { [ADMIN_HEADER]: "pw" } };
+  assert.equal((await locked.fetch("/admin/check")).status, 401);
+  assert.equal((await locked.fetch("/admin/check", ok)).status, 200);
+  assert.equal((await locked.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "evacuate" }) })).status, 401);
+  assert.equal(locked.mode, "normal");
+  assert.equal((await locked.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "evacuate" }), ...ok })).status, 200);
+  const e = locked.emit("heat", "A");
+  assert.equal((await locked.fetch(`/events/${e.id}/check`, { method: "POST" })).status, 401);
+  assert.equal((await locked.fetch(`/events/${e.id}/check`, { method: "POST", ...ok })).status, 200);
+  assert.equal((await locked.fetch("/status")).status, 200);
+  assert.equal((await new FakeServer({ seed: 1 }).fetch("/admin/check")).status, 200, "비밀번호가 없으면 잠그지 않음");
+
+  // 화면: 잠긴 서버면 비밀번호를 맞힐 때까지 관리자 화면을 열지 않는다
+  delete globalThis.document?.title;
+  const submit = (el, pw) => {
+    el("login-password").value = pw;
+    return el("login-form").onsubmit({ preventDefault() {} });
+  };
+  const app = await bootApp("?fake&admin&lock", "lock", {
+    login: async (el) => {
+      await tickWait(20);
+      assert.equal(el("login").hidden, false, "비밀번호 칸");
+      assert.equal(globalThis.document.title, undefined, "관리자 화면은 아직 안 엶");
+      assert.equal(el("login-back").href, "./?fake=&lock=", "기본 화면으로 (admin만 뺌)");
+      await submit(el, "nope");
+      assert.equal(el("login-error").textContent, "비밀번호가 맞지 않습니다.");
+      assert.equal(el("login-error").hidden, false);
+      assert.equal(el("login").hidden, false);
+      await submit(el, "1234");
+    },
+  });
+  const { el, fake } = app;
+  assert.equal(el("login").hidden, true);
+  assert.match(globalThis.document.title, /관리자/);
+
+  // 비밀번호를 붙여 보내므로 경보 해제가 됨
+  const ob = fake.emit("obstacle", "A");
+  await tickWait();
+  await app.click({ check: String(ob.id) });
+  await tickWait();
+  assert.equal(fake.events.find((x) => x.id === ob.id).checked, true);
+
+  // 서버 비밀번호가 바뀌면 401 → 해제 안 됨, 다시 묻는다. 새 비밀번호를 넣으면 다시 됨
+  fake.adminPassword = "5678";
+  const ob2 = fake.emit("obstacle", "B");
+  await tickWait();
+  await app.click({ check: String(ob2.id) });
+  await tickWait();
+  assert.equal(fake.events.find((x) => x.id === ob2.id).checked, false);
+  assert.equal(el("login").hidden, false);
+  assert.match(el("login-error").textContent, /바뀌었습니다/);
+  assert.match(el("detail").innerHTML, /관리자 비밀번호가 맞지 않음/);
+  await submit(el, "5678");
+  await tickWait();
+  assert.equal(el("login").hidden, true);
+  await app.click({ check: String(ob2.id) });
+  await tickWait();
+  assert.equal(fake.events.find((x) => x.id === ob2.id).checked, true);
   app.stop();
 }
 

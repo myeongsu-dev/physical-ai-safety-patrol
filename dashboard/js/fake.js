@@ -3,7 +3,9 @@
 // 진짜 서버와 같은 모양으로 흉내 낸다.
 //   - fake.socket()  : new WebSocket(".../ws") 대신. onopen · onmessage · onclose · close()
 //                      붙자마자 로봇 state 전부, mode, 해제 안 된 경보를 보내고, 그 뒤로 새 메시지
-//   - fake.fetch()   : fetch() 대신. POST /events/{id}/check, POST /mode, GET /status
+//   - fake.fetch()   : fetch() 대신. POST /events/{id}/check, POST /mode, GET /status, GET /admin/check
+//                      new FakeServer({ adminPassword: "1234" })면 진짜 서버의 관리자 잠금처럼
+//                      경보 해제·모드 변경은 헤더 X-Admin-Password가 맞아야 받는다 (틀리면 401)
 //
 // 시험용 조작 (진짜 서버에는 없음)
 //   - fake.emit(종류, 로봇) : 경보 하나 바로 보냄. 종류는 obstacle · floor_object · helmet · heat · flame
@@ -246,7 +248,8 @@ class FakeSocket {
 
 export class FakeServer {
   // seed: 같은 값이면 같은 움직임. defer: 소켓 콜백을 미루는 방법 (시험에서 바꿔 끼움)
-  constructor({ seed = Date.now(), defer = (fn) => setTimeout(fn, 0) } = {}) {
+  constructor({ seed = Date.now(), defer = (fn) => setTimeout(fn, 0), adminPassword = null } = {}) {
+    this.adminPassword = adminPassword || null; // 없으면 잠그지 않음 (진짜 서버도 같음)
     this.rng = makeRng(seed);
     this.defer = defer;
     this.mode = "normal";
@@ -293,6 +296,12 @@ export class FakeServer {
   async fetch(path, opts = {}) {
     const method = (opts.method || "GET").toUpperCase();
     const body = opts.body ? JSON.parse(opts.body) : {};
+    const admin = !this.adminPassword || (opts.headers ?? {})["X-Admin-Password"] === this.adminPassword;
+    const locked = method === "POST" && /^\/(events\/\d+\/check|mode|fleet\/start|robots\/)/.test(path);
+    if (path === "/admin/check" && method === "GET") {
+      return admin ? jsonResponse(200, { ok: true }) : jsonResponse(401, { detail: "관리자 비밀번호가 틀림" });
+    }
+    if (locked && !admin) return jsonResponse(401, { detail: "관리자 비밀번호가 틀림" });
 
     let m = path.match(/^\/events\/(\d+)\/check$/);
     if (m && method === "POST") {

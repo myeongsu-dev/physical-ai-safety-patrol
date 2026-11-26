@@ -414,3 +414,40 @@ ul { list-style: none; margin: 0; padding: 0; }
 .fields { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); margin: calc(var(--gap) * 1.5) 0 0; }
 .fields dt { color: var(--muted); font-size: 13px; }
 .fields dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+/* ---------- 관리자 비밀번호 (관리자 화면에 들어갈 때, 비밀번호가 바뀌었을 때) ---------- */
+.login-wrap { z-index: 20; }
+.login {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  width: min(360px, 100%);
+  padding: calc(var(--gap) * 2.5);
+  background: var(--panel);
+  border-top: 6px solid var(--text);
+  border-radius: var(--radius);
+}
+.login h2 { margin: 0 0 var(--gap); font-size: 20px; }
+.login label { color: var(--muted); font-size: 14px; }
+.login input {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.login input:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+.login .error { margin: 0; }
+.login-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--gap); margin-top: var(--gap); }
+.login-btn {
+  font: inherit;
+  font-weight: 600;
+  padding: 8px 18px;
+  border: 1px solid var(--text);
+  border-radius: var(--radius);
+  background: var(--text);
+  color: #ffffff;
+  cursor: pointer;
+}
+.login-btn:disabled { opacity: 0.6; cursor: default; }
+.login-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.login-back { color: var(--muted); font-size: 14px; }

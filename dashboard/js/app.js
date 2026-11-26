@@ -4,14 +4,21 @@
 import {
   createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, evacView,
 } from "./store.js";
-import { connect } from "./conn.js";
+import { connect, request } from "./conn.js";
+import { FakeServer } from "./fake.js";
+import { checkAdmin, withPassword, loadPassword, savePassword } from "./auth.js";
 import { VIEWBOX, baseMap, legendHtml, robotLayer, fireLayer, guideLayer, MARKER_POS } from "./map.js";
 import { createAlarm } from "./sound.js";
 
 const store = createStore();
 const params = new URLSearchParams(location.search);
-// 주소에 ?admin을 붙이면 관리자 화면. 잠금은 서버와 정한 뒤에 붙인다 (README "화면")
+// 주소에 ?admin을 붙이면 관리자 화면. 서버가 잠가 두었으면 비밀번호를 물은 뒤에 연다 (README "관리자 잠금")
 const admin = params.has("admin");
+// ?fake면 가짜 서버. ?fake&lock이면 가짜 서버도 비밀번호(FAKE_PASSWORD)로 잠근다
+const FAKE_PASSWORD = "1234";
+const fakeServer = params.has("fake")
+  ? new FakeServer({ adminPassword: params.has("lock") ? FAKE_PASSWORD : null }).start()
+  : null;
 
 const STATUS_TEXT = { connecting: "연결 중", open: "연결됨", closed: "끊김" };
 const MODE_TEXT = { normal: "평상시", evacuate: "대피" };
@@ -291,7 +298,7 @@ async function releaseEvac(sure) {
   evac.error = null;
   render();
   try {
-    const res = await conn.request("/mode", {
+    const res = await adminRequest("/mode", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode: "normal" }),
@@ -503,7 +510,7 @@ async function checkAlert(id) {
   detail.error = null;
   render();
   try {
-    const res = await conn.request(`/events/${id}/check`, { method: "POST" });
+    const res = await adminRequest(`/events/${id}/check`, { method: "POST" });
     if (!res.ok) throw new Error(`서버 응답 ${res.status}`);
     // 서버가 WebSocket으로도 checked:true를 다시 보내지만, 받은 답으로 바로 반영한다
     apply(store, await res.json());
@@ -613,11 +620,83 @@ function esc(x) {
   return String(x).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
+// ---------- 관리자 잠금 ----------
+// 서버 .env에 ADMIN_PASSWORD가 있으면 경보 해제 · 대피 해제는 비밀번호 헤더가 맞아야 받는다 (server/api.py)
+
+// 관리자 요청. 비밀번호를 붙여 보내고, 401이면 비밀번호가 바뀐 것이라 다시 묻는다
+async function adminRequest(path, opts) {
+  const res = await conn.request(path, withPassword(opts, loadPassword()));
+  if (res.status === 401) {
+    savePassword("");
+    unlockAdmin("관리자 비밀번호가 바뀌었습니다. 다시 입력하세요.");
+    throw new Error("관리자 비밀번호가 맞지 않음");
+  }
+  return res;
+}
+
+// 비밀번호가 맞을 때까지 비밀번호 칸을 띄운다. 이미 떠 있으면 그 약속을 같이 기다린다.
+// message가 없으면 먼저 저장된 비밀번호(없으면 빈 값)로 물어보고, 맞으면 칸을 띄우지 않는다
+let unlocking = null;
+function unlockAdmin(message = "") {
+  unlocking ??= askPassword(message).finally(() => (unlocking = null));
+  return unlocking;
+}
+
+async function askPassword(message) {
+  const ask = (path, opts) => request(fakeServer, path, opts);
+  if (!message) {
+    const saved = loadPassword();
+    const r = await checkAdmin(ask, saved);
+    if (r === "ok") return;
+    if (r === "error") message = "서버에 연결할 수 없습니다. 잠시 뒤 다시 누르세요.";
+    else if (saved) message = "관리자 비밀번호가 바뀌었습니다. 다시 입력하세요.";
+  }
+  const wrap = document.getElementById("login");
+  const form = document.getElementById("login-form");
+  const input = document.getElementById("login-password");
+  const errEl = document.getElementById("login-error");
+  const btn = document.getElementById("login-btn");
+  // 기본 화면으로: 주소에서 admin만 뺀다 (?fake 등은 그대로)
+  const q = new URLSearchParams(location.search);
+  q.delete("admin");
+  const qs = q.toString();
+  document.getElementById("login-back").href = "./" + (qs ? "?" + qs : "");
+  const showError = (text) => {
+    errEl.textContent = text;
+    errEl.hidden = !text;
+  };
+  showError(message);
+  input.value = "";
+  wrap.hidden = false;
+  input.focus?.();
+  await new Promise((resolve) => {
+    form.onsubmit = async (ev) => {
+      ev?.preventDefault?.();
+      if (btn.disabled) return;
+      btn.disabled = true;
+      const password = input.value;
+      const r = await checkAdmin(ask, password);
+      btn.disabled = false;
+      if (r === "ok") {
+        savePassword(password);
+        resolve();
+        return;
+      }
+      showError(r === "wrong" ? "비밀번호가 맞지 않습니다." : "서버에 연결할 수 없습니다. 잠시 뒤 다시 누르세요.");
+      input.select?.();
+    };
+  });
+  form.onsubmit = null;
+  wrap.hidden = true;
+}
+
 // 지도 바탕은 한 번만 그린다
 const mapEl = document.getElementById("map");
 mapEl.setAttribute("viewBox", VIEWBOX);
 mapEl.innerHTML = baseMap('<g class="fire"></g><g class="guides"></g>') + '<g class="robots"></g>';
 document.getElementById("legend").innerHTML = legendHtml({ robots: admin });
+// 관리자 화면은 비밀번호가 맞을 때까지 열지 않는다 (서버가 잠그지 않았으면 바로 열림)
+if (admin) await unlockAdmin();
 if (admin) {
   document.title = "안전 순찰 관제 (관리자)";
   document.getElementById("view-name").hidden = false;
@@ -637,7 +716,7 @@ if (admin) {
 
 // 위의 함수와 값이 모두 준비된 뒤에 연결을 시작한다 (연결 중에도 바로 render를 부르기 때문)
 const conn = connect({
-  fake: params.has("fake"),
+  fake: fakeServer,
   onMessage: (msg) => {
     const prevMode = store.mode;
     apply(store, msg);
