@@ -659,7 +659,7 @@ async function askPassword(message) {
   // 기본 화면으로: 주소에서 admin만 뺀다 (?fake 등은 그대로)
   const q = new URLSearchParams(location.search);
   q.delete("admin");
-  const qs = q.toString();
+  const qs = q.toString().replace(/=(&|$)/g, "$1");
   document.getElementById("login-back").href = "./" + (qs ? "?" + qs : "");
   const showError = (text) => {
     errEl.textContent = text;
@@ -695,6 +695,18 @@ const mapEl = document.getElementById("map");
 mapEl.setAttribute("viewBox", VIEWBOX);
 mapEl.innerHTML = baseMap('<g class="fire"></g><g class="guides"></g>') + '<g class="robots"></g>';
 document.getElementById("legend").innerHTML = legendHtml({ robots: admin });
+// 위 막대의 화면 바꾸기 버튼: 기본 화면이면 "관리자 화면", 관리자 화면이면 "기본 화면으로".
+// 주소의 다른 값(?fake 등)은 그대로 둔다. 관리자 화면에서 나가면 비밀번호도 지워 다음에 다시 묻는다
+{
+  const q = new URLSearchParams(location.search);
+  if (admin) q.delete("admin");
+  else q.set("admin", "");
+  const qs = q.toString().replace(/=(&|$)/g, "$1");
+  const sw = document.getElementById("view-switch");
+  sw.href = "./" + (qs ? "?" + qs : "");
+  sw.textContent = admin ? "기본 화면으로" : "관리자 화면";
+  if (admin) sw.onclick = () => savePassword("");
+}
 // 관리자 화면은 비밀번호가 맞을 때까지 열지 않는다 (서버가 잠그지 않았으면 바로 열림)
 if (admin) await unlockAdmin();
 if (admin) {

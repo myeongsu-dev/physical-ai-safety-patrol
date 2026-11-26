@@ -322,9 +322,10 @@ ul { list-style: none; margin: 0; padding: 0; }
 .error { margin: var(--gap) 0 0; color: var(--bad); font-size: 13px; }
 
 /* ---------- 경보음 켜기 (관리자 화면) ---------- */
-.sound-btn {
+/* 위 막대 버튼(경보음, 관리자 화면 · 기본 화면으로)은 옆의 서버 · 로봇 글자와 같은 크기 */
+.sound-btn,
+.bar-btn {
   font: inherit;
-  font-size: 14px;
   padding: 4px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -333,7 +334,10 @@ ul { list-style: none; margin: 0; padding: 0; }
   cursor: pointer;
 }
 .sound-btn.off { border-color: var(--warn); background: var(--warn-bg); color: var(--warn); font-weight: 600; }
-.sound-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.sound-btn:focus-visible,
+.bar-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.bar-btn { display: inline-block; text-decoration: none; font-weight: 600; }
+.bar-btn:hover { background: var(--bg); }
 
 /* ---------- 깜빡임: 과열, 밟힘 주의 (눌러서 볼 때까지) ---------- */
 @keyframes blink { 50% { background: var(--warn-bg); } }

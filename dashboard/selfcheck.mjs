@@ -389,6 +389,9 @@ async function bootApp(search, tag, { login } = {}) {
 {
   const app = await bootApp("?fake", "basic");
   const { el } = app;
+  // 기본 화면의 관리자 화면 버튼: ?fake는 두고 admin을 붙인다
+  assert.equal(el("view-switch").textContent, "관리자 화면");
+  assert.equal(el("view-switch").href, "./?fake&admin");
   assert.equal(el("server .value").textContent, "연결됨");
   assert.equal(el("robots .value").textContent, "4/4대");
   assert.equal(el("robot-list").innerHTML, ""); // 로봇 현황 카드는 관리자 화면에만 (칸은 HTML에서 hidden 그대로)
@@ -708,7 +711,8 @@ class FakeAudioContext {
       await tickWait(20);
       assert.equal(el("login").hidden, false, "비밀번호 칸");
       assert.equal(globalThis.document.title, undefined, "관리자 화면은 아직 안 엶");
-      assert.equal(el("login-back").href, "./?fake=&lock=", "기본 화면으로 (admin만 뺌)");
+      assert.equal(el("login-back").href, "./?fake&lock", "기본 화면으로 (admin만 뺌)");
+      assert.equal(el("view-switch").textContent, "기본 화면으로");
       await submit(el, "nope");
       assert.equal(el("login-error").textContent, "비밀번호가 맞지 않습니다.");
       assert.equal(el("login-error").hidden, false);
@@ -719,6 +723,7 @@ class FakeAudioContext {
   const { el, fake } = app;
   assert.equal(el("login").hidden, true);
   assert.match(globalThis.document.title, /관리자/);
+  assert.equal(el("view-switch").href, "./?fake&lock");
 
   // 비밀번호를 붙여 보내므로 경보 해제가 됨
   const ob = fake.emit("obstacle", "A");
@@ -743,6 +748,10 @@ class FakeAudioContext {
   await app.click({ check: String(ob2.id) });
   await tickWait();
   assert.equal(fake.events.find((x) => x.id === ob2.id).checked, true);
+  const { loadPassword } = await import("./js/auth.js");
+  assert.equal(loadPassword(), "5678");
+  el("view-switch").onclick();
+  assert.equal(loadPassword(), "", "관리자 화면에서 나가면 비밀번호를 지움");
   app.stop();
 }
 
