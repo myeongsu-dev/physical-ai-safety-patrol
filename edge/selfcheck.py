@@ -450,6 +450,39 @@ def check_patrol(spool):
     assert dog.sent[0] == ("S",) and states[-1]["status"] == "idle"
 
 
+def check_web(spool):
+    """디버그 웹 화면: 상태 JSON·기록·사진이 나오고 마지막 인식 결과가 담기는지 (빈 포트로 실제로 띄움)"""
+    import json
+    import logging
+    import urllib.request
+
+    from edge.webview import WebView, collect, SysStats
+
+    ag, dog, th, clock, events, states = make(spool, model=Det1([Det("head", 0.8, (1, 2, 30, 40))]))
+    run(ag, clock, 0.3)
+    assert ag.last_dets["dets"] == [{"cls": "head", "conf": 0.8, "box": [1, 2, 30, 40]}]
+    s = collect(ag, SysStats(), None)
+    json.dumps(s, default=str)
+    assert s["model"]["ready"] and s["model"]["dets"][0]["cls"] == "head" and s["agent"]["status"] == "idle"
+
+    web = WebView(ag, port=0, host="127.0.0.1")
+    assert web.start()
+    try:
+        base = "http://127.0.0.1:%d" % web.port
+        get = lambda path: urllib.request.urlopen(base + path, timeout=3).read()
+        assert json.loads(get("/api/status"))["robot"] == config.ROBOT_ID
+        assert get("/snapshot.jpg").startswith(SOI)
+        assert b"<title>" in get("/")
+        logging.disable(logging.NOTSET)   # 이 한 줄은 기록이 나와야 함 (웹 기록 통으로만 감)
+        try:
+            logging.getLogger("edge.test").warning("웹 기록 시험")
+        finally:
+            logging.disable(logging.WARNING)
+        assert any("웹 기록 시험" in l["msg"] for l in json.loads(get("/api/log?after=0")))
+    finally:
+        web.stop()
+
+
 if __name__ == "__main__":
     import logging
 
@@ -460,4 +493,5 @@ if __name__ == "__main__":
         check_messages(Path(d) / "m")
         check_agent(Path(d) / "a")
         check_patrol(Path(d) / "p")
+        check_web(Path(d) / "w")
     print("edge ok")

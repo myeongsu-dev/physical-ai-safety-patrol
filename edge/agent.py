@@ -5,6 +5,7 @@
   python -m edge.agent --fake         # 장치 없이 PC에서: 가짜 보드·카메라·온도 + 막힘·과열 장면
   python -m edge.agent --fake-dog     # 일부만 가짜로 (--fake-cam, --fake-thermo도 있음)
   python -m edge.agent --drive        # 통신·주행만: 실제 보드 + MQTT, 머리 카메라·온도·AI 없이 (가상 과열·장애물 장면 없음)
+  python -m edge.agent --web 0        # 디버그 웹 화면 끄기 (기본: http://<Pi IP>:8080, edge/webview.py)
 
 한 바퀴(step)마다: 보드 줄 처리 → 서버 명령 처리 → 보드 연결 감시 → 온도 → 카메라 추론 → 이동 유지 → 1초마다 state
 
@@ -80,6 +81,7 @@ class Agent:
         self.heat = None          # {"temps", "next", "flame", "flame_hit", "reported", "until"}
         self.heat_quiet_until = 0.0
         self.near = 0             # Pi 보조 정지: 연속으로 가까웠던 횟수
+        self.last_dets = None     # 마지막 추론 {"ts", "size": (w, h), "dets": [...]} (웹 화면용)
 
         self.helmet_vote = Voter()
         self.flame_vote = Voter()
@@ -322,6 +324,7 @@ class Agent:
         self.near = 0
         frame = self.cam.latest()
         dets = self.model(frame.image) if (frame and self.model is not None and self.model.ready) else []
+        self._keep_dets(frame, dets)
         self.blocked = {"since": self.clock(), "person": has_person(dets), "reported": False}
         if self.blocked["person"]:
             log.info("막힘: 사람 → 비킬 때까지 기다림")
@@ -488,6 +491,7 @@ class Agent:
         if not heat_check and self.status == "guide":
             return
         dets = self.model(frame.image)   # 통합 모델: 한 장에 한 번 추론하고 결과를 나눠 씀
+        self._keep_dets(frame, dets)
         if heat_check:                   # 불꽃 판정은 과열 의심 때만 (그동안 안전모 판정은 쉼)
             hit, c = fire(dets)
             self.heat["flame"] = max(self.heat["flame"], c)
@@ -498,6 +502,13 @@ class Agent:
         if self.helmet_vote.push(hit) and self._cooled("helmet", now):
             self.reporter.report_event("helmet", jpeg=frame.jpeg, marker=self.marker, conf=round(c, 2))
             self.dog.send("A", config.VOICE_HELMET, config.VOICE_VOLUME)
+
+    def _keep_dets(self, frame, dets):
+        """웹 화면에 상자를 그리게 마지막 결과를 남김 (새 dict로 바꿔 끼워 다른 스레드가 읽어도 안전)"""
+        shape = getattr(frame.image, "shape", None) if frame else None
+        self.last_dets = {"ts": self.clock(), "size": (shape[1], shape[0]) if shape else None,
+                          "dets": [{"cls": d.cls, "conf": round(d.conf, 3), "box": [round(v, 1) for v in d.box]}
+                                   for d in dets]}
 
     def _cooled(self, kind, now):
         if now - self.last_event.get(kind, -1e9) < config.EVENT_COOLDOWN_S:
@@ -527,6 +538,8 @@ def main(argv=None):
                     help="통신·주행만: 머리 카메라·온도·AI 없이 (가짜 카메라·온도, 장면 없음). 보드는 --fake-dog가 없으면 실제")
     ap.add_argument("--patrol", action="store_true", help="서버 명령 없이 바로 순찰")
     ap.add_argument("--role", choices=protocol.ROLES, help="--patrol 때 순찰 역할")
+    ap.add_argument("--web", type=int, default=config.WEB_PORT, metavar="PORT",
+                    help="디버그 웹 화면 포트 (0이면 끔, 기본 %(default)s)")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO,
@@ -561,7 +574,12 @@ def main(argv=None):
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, _on_term)
+    web = None
     try:
+        if a.web:  # 장치보다 먼저: 포트 열기 실패 같은 시작 기록도 웹에 남게
+            from edge.webview import WebView
+            web = WebView(agent, port=a.web)
+            web.start()
         agent.start()
         if a.fake:
             threading.Thread(target=_fake_scene, args=(dog,), daemon=True).start()
@@ -573,6 +591,8 @@ def main(argv=None):
         log.info("끝냄")
     finally:
         agent.stop()   # 보드 S. 강제 종료(kill -9·전원)면 보드가 2초 감시로 멈춤
+        if web:
+            web.stop()
 
 
 def _wait_ready(agent, secs=3.0):
