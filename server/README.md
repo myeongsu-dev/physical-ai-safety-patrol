@@ -14,6 +14,7 @@
 - 출력: `potent/{로봇}/cmd` · `potent/mode`, 대시보드 WebSocket ([docs/protocol.md](../docs/protocol.md) 2·3절)
 - 기록: 이벤트·사진을 SQLite에 (`server/photos/`, `*.sqlite3`은 커밋 안 함)
 - MQTT 브로커: Mosquitto (노트북에 설치, 포트 1883)
+- 출발: 서버 자동. 빈 역할(A·B)이 있으면 도크(15)에서 쉬고 배터리가 `BATTERY_START`(60%, 임시) 이상인 로봇 중 가장 많은 로봇을 내보냄. 길 중간에서 멈춘 로봇, 관리자가 stop한 로봇, 대피 중에는 안 내보냄
 - 관리자 잠금: 저장소 맨 위 `.env`에 `ADMIN_PASSWORD=...`를 적으면 경보 닫기 · 출발 · 명령 · 모드 변경은 헤더 `X-Admin-Password`가 맞아야 받음. 비워 두면 잠그지 않음 (개발용)
 
 ```bash

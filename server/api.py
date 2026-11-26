@@ -12,7 +12,7 @@ heat 이벤트는 events.HeatCheck로 교차 확인해 출동·대피 명령을 
 | POST /events/{id}/check | 관리자가 경보를 닫음. body {"false_alarm": true}면 오탐으로 저장 (body 없으면 정탐) |
 | GET /events?limit=50&before=id&type=heat | 지난 경보 목록 (닫힌 것 포함), 최근 것부터 |
 | GET /admin/check | 관리자 비밀번호 맞는지 (맞으면 200, 틀리면 401) |
-| POST /fleet/start | 비어 있는 역할(A·B)을 대기 로봇에게 나눠 주며 출발 |
+| POST /fleet/start | 비어 있는 역할(A·B)을 대기 로봇에게 나눠 주며 출발 (수동. 평소엔 서버가 자동으로 함) |
 | POST /robots/{로봇}/patrol?role=A | 역할을 직접 정해 출발 |
 | POST /robots/{로봇}/cmd | 명령 직접 보내기 (body: {"cmd": "stop"} 등) |
 | POST /mode | {"mode": "normal" · "evacuate"} (normal로 돌리면 교차 확인도 처음부터) |
@@ -20,6 +20,9 @@ heat 이벤트는 events.HeatCheck로 교차 확인해 출동·대피 명령을 
 
 관리자 잠금: .env에 ADMIN_PASSWORD를 적으면 경보 닫기 · 출발 · 명령 · 모드 변경은
 헤더 X-Admin-Password가 맞을 때만 받는다 (틀리면 401). 비워 두면 잠그지 않는다 (개발용).
+
+출발은 서버 자동 (normal 모드일 때 1초마다): 빈 역할이 있으면 도크에서 쉬는 로봇 중 배터리가 가장 많은 로봇에 patrol.
+관리자가 stop을 보낸 로봇은 patrol · resume을 직접 보내기 전까지 자동 출발에서 뺀다.
 
 state 메시지의 online이 false면 연결 끊김 (ONLINE_SEC초 넘게 state 없음). 끊길 때 한 번, 다시 붙을 때 다시 보낸다.
 | / | dashboard/ 폴더 (index.html이 생기면) |
@@ -82,8 +85,10 @@ class Server:
     """MQTT와 화면 사이에서 상태를 들고 있는 것. mqtt=False면 브로커 없이(시험용)."""
 
     def __init__(self, db_path=":memory:", photo_dir=PHOTO_DIR, mqtt=True, host="localhost", port=1883,
-                 clock=time.time, admin_password=None):
+                 clock=time.time, admin_password=None, auto_start=True):
         self.clock = clock
+        self.auto_start = auto_start
+        self.held = set()   # 관리자가 stop을 보낸 로봇 (자동 출발 안 함)
         self.admin_password = admin_password or None   # 없으면 잠그지 않음
         self.fleet = Fleet(clock=clock)
         self.linked = {}    # 로봇 → 지난번에 본 연결 상태 (끊김·다시 붙음을 화면에 알리려고)
@@ -162,6 +167,10 @@ class Server:
                 self.hub.push(self.state_msg(robot))
         with self.lock:
             self.apply(self.heat.tick())
+            if self.auto_start and self.mode == "normal":
+                sent = self.send_all(self.fleet.auto_assign(auto=True, exclude=self.heat.busy() | self.held))
+                for s in sent:
+                    log.info("자동 출발 %s 역할 %s", s["topic"].split("/")[1], s["msg"]["role"])
 
     def apply(self, actions):
         """HeatCheck가 돌려준 할 일 실행"""
@@ -279,14 +288,18 @@ def create_app(server):
 
     @app.post("/fleet/start", dependencies=lock)
     def fleet_start():
-        return {"sent": server.send_all(server.fleet.auto_assign())}
+        with server.lock:
+            return {"sent": server.send_all(server.fleet.auto_assign(exclude=server.heat.busy()))}
 
     @app.post("/robots/{robot}/patrol", dependencies=lock)
     def robot_patrol(robot: str, role: str):
         try:
-            return {"sent": server.send_all(server.fleet.assign(robot, role))}
+            with server.lock:
+                sent = server.send_all(server.fleet.assign(robot, role))
         except ValueError as e:
             raise HTTPException(409, str(e))
+        server.held.discard(robot)
+        return {"sent": sent}
 
     @app.post("/robots/{robot}/cmd", dependencies=lock)
     def robot_cmd(robot: str, body: dict):
@@ -294,6 +307,10 @@ def create_app(server):
             msg = protocol.command(body.pop("cmd", ""), **body)
         except (ValueError, TypeError) as e:
             raise HTTPException(400, str(e))
+        if msg["cmd"] == "stop":
+            server.held.add(robot)
+        elif msg["cmd"] in ("patrol", "resume"):
+            server.held.discard(robot)
         return {"sent": server.send_all([(protocol.topic(robot, "cmd"), msg)])}
 
     @app.post("/mode", dependencies=lock)
@@ -322,7 +339,7 @@ def selfcheck():
 
     with tempfile.TemporaryDirectory() as tmp:
         now = [time.time()]
-        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0])
+        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0], auto_start=False)
         with TestClient(create_app(srv)) as c:
             # 로봇 두 대가 state를 보내면 대시보드 WebSocket에 붙자마자 보인다
             srv.on_mqtt("potent/A/state", protocol.pack({"marker": 15, "status": "idle", "battery": 90}))
@@ -389,8 +406,34 @@ def selfcheck():
                 assert m["robot"] == "B" and m["online"] is True
             assert ("potent/mode", {"mode": "evacuate"}) in srv.sent
             assert c.get("/status").json()["roles"] == {"A": "A", "B": "B"}
+        # 자동 출발: 도크에서 쉬는 로봇 중 배터리 많은 순, 관리자가 세운 로봇과 대피 중엔 안 함
+        now[0] += 100
+        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0])
+        with TestClient(create_app(srv)) as c:
+            srv.on_mqtt("potent/A/state", protocol.pack({"marker": 15, "status": "idle", "battery": 70}))
+            srv.on_mqtt("potent/B/state", protocol.pack({"marker": 15, "status": "idle", "battery": 90}))
+            srv.on_mqtt("potent/C/state", protocol.pack({"marker": 15, "status": "idle", "battery": 99}))
+            c.post("/robots/C/cmd", json={"cmd": "stop"})
+            srv.sent.clear()
+            srv.tick()
+            assert srv.sent == [("potent/B/cmd", {"cmd": "patrol", "role": "A"}),
+                                ("potent/A/cmd", {"cmd": "patrol", "role": "B"})], srv.sent
+            srv.tick()
+            assert len(srv.sent) == 2                       # 보드 응답 기다리는 동안 또 안 보냄
+            srv.sent.clear()
+            c.post("/mode", json={"mode": "evacuate"})
+            now[0] += 60
+            for n, b in (("A", 70), ("B", 90), ("C", 99)):
+                srv.on_mqtt(f"potent/{n}/state", protocol.pack({"marker": 15, "status": "idle", "battery": b}))
+            srv.tick()
+            assert srv.sent == [("potent/mode", {"mode": "evacuate"})]   # 대피 중엔 출발 안 함
+            c.post("/mode", json={"mode": "normal"})
+            c.post("/robots/C/cmd", json={"cmd": "resume"})              # 관리자가 풀면 다시 대상
+            srv.sent.clear()
+            srv.tick()
+            assert srv.sent[0] == ("potent/C/cmd", {"cmd": "patrol", "role": "A"}), srv.sent
         # 관리자 잠금: 비밀번호를 정하면 경보 닫기·출발·명령·모드는 맞는 헤더가 있어야 함
-        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, admin_password="pw1234")
+        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, admin_password="pw1234", auto_start=False)
         with TestClient(create_app(srv)) as c:
             ok = {"X-Admin-Password": "pw1234"}
             assert c.get("/admin/check").status_code == 401
