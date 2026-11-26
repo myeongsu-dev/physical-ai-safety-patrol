@@ -7,7 +7,7 @@ import { DOCK_MARKER } from "./mapdata.js";
 export const ROBOTS = ["A", "B", "C", "D"];
 
 // 화면에 보이는 로봇 이름. 서버·Pi와 주고받는 이름(ROBOT_ID)은 A~D 그대로 두고 화면에서만 바꾼다.
-// 팀 공통 이름은 아직 미정 (README "화면 용어")
+// 팀 공통 이름으로 정함 (README "화면 용어")
 export const ROBOT_LABEL = { A: "MD-1", B: "MD-2", C: "MD-3", D: "MD-4" };
 
 export function robotLabel(name) {
@@ -111,7 +111,7 @@ function pick(o, keys) {
 
 // 정탐률: 해제한 경보 중 실제였던(오탐이 아닌) 비율. 경보 종류별과 전체.
 // 로봇이 놓친 위험은 경보가 없어서 셀 수 없다. 그래서 "정확도"가 아니라 정탐률이다.
-// 화면이 가진 경보 이력(서버에서 꺼내 온 것 포함)만 센다. 안전모 미착용은 뺀다 (화면 표시 미정)
+// 화면이 가진 경보 이력(서버에서 꺼내 온 것 포함)만 센다. 안전모 미착용은 뺀다 (현장 음성 안내만, 대시보드에 안 보임)
 export const STAT_TYPES = ["obstacle", "floor_object", "heat", "flame"];
 export function alarmStats(store) {
   const rows = Object.fromEntries(STAT_TYPES.map((t) => [t, { type: t, closed: 0, falseAlarm: 0 }]));
@@ -154,7 +154,7 @@ export function robotOnline(store, name, now = Date.now()) {
 //   주의: 해제 안 된 통로 차단 · 밟힘 주의 · 과열 · 불꽃 감지 경보가 있거나, 끊긴 로봇이 있음.
 //         불꽃 감지(flame)는 로봇 한 대가 불꽃을 본 것이라 서버가 아직 확인하는 중이다
 //   안전: 그 밖
-// 안전모 미착용(helmet)은 화면에 보여 줄지 미정이라 넣지 않는다.
+// 안전모 미착용(helmet)은 현장 음성 안내만 하고 대시보드에는 보여 주지 않는다 (팀 결정). 서버는 보내지만 화면이 거른다.
 // 서버가 끊겨 있으면 지금 상태를 알 수 없으므로 level은 "unknown"
 export function safetySummary(store, now = Date.now()) {
   const counts = { heat: 0, obstacle: 0, floor: 0 }; // 과열·불꽃 감지, 통로 차단, 밟힘 주의
@@ -174,7 +174,7 @@ export function safetySummary(store, now = Date.now()) {
 }
 
 // 최근 경보: 해제 안 된 경보, 새것부터.
-// 안전모 미착용은 화면에 보여 줄지 미정이라 뺀다 (safetySummary와 같은 기준)
+// 안전모 미착용은 대시보드에 보여 주지 않는다 (safetySummary와 같은 기준)
 export function openAlerts(store, limit = 5) {
   return [...store.events.values()]
     .filter((e) => e.type !== "helmet")
@@ -186,6 +186,28 @@ export function openAlerts(store, limit = 5) {
 // 불꽃 감지(flame) 경보만으로는 그리지 않는다. 화재는 서버가 확정한 것만 보여 준다
 export function evacView(store) {
   return store.mode === "evacuate" ? store.evac : null;
+}
+
+// 길 중간에 멈춘 로봇 (이슈 #22). state에 멈춘 이유가 아직 없어서, 충전 스테이션이 아닌 곳에서 "대기"면 멈춤으로 본다.
+// 충전 스테이션에서 쉬는 로봇과 통로 한가운데 선 로봇을 구분하려는 것. 안전 현황 단계는 올리지 않는다.
+// 엣지가 state에 hold(edge/agent.py의 멈춘 이유)를 실어 보내면 reason에 넣는다. 없으면 null (현장 확인 필요)
+export const HOLD_TEXT = {
+  wait: "교차 확인 대기",
+  stop: "관리자 정지",
+  guide: "대피 안내 중",
+  link: "안전 정지: 보드 연결 끊김",
+  stream: "안전 정지: 보드 센서 값 끊김",
+  no_ack: "안전 정지: 보드가 명령에 답 없음",
+  board: "안전 정지: 보드 동작 오류",
+  send: "안전 정지: 보드에 명령 못 보냄",
+  line: "안전 정지: 선을 놓침",
+  not_ready: "출발 못 함: 보드·센서 준비 안 됨",
+  exit: "Pi 프로그램 꺼짐",
+};
+export function robotStop(msg) {
+  if (!msg || msg.status !== "idle" || msg.marker == null || msg.marker === DOCK_MARKER) return null;
+  const hold = typeof msg.hold === "string" && msg.hold ? msg.hold : null;
+  return { hold, reason: hold ? HOLD_TEXT[hold] ?? hold : null };
 }
 
 // 로봇 위치를 글자로. 예: "A 경로 · 마커 8", "충전 스테이션", "마커 14"

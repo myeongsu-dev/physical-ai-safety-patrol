@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN, RETURN_POINT, EXITS } from "./js/mapdata.js";
 import { FakeServer, EVENT_TYPES, evacPlan } from "./js/fake.js";
-import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, evacView, loadHistory, alarmStats, ONLINE_SEC } from "./js/store.js";
+import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, evacView, loadHistory, alarmStats, robotStop, ONLINE_SEC } from "./js/store.js";
 import { robotLayer, fireLayer, guideLayer, corridorPoints, MARKER_POS } from "./js/map.js";
 import { checkAdmin, withPassword, ADMIN_HEADER } from "./js/auth.js";
 
@@ -893,6 +893,52 @@ class FakeAudioContext {
     assert.equal(app3.el("history-more").innerHTML, "");
     app3.stop();
   }
+}
+
+// ---------- 길 중간에 멈춘 로봇 (이슈 #22) ----------
+{
+  assert.equal(robotStop({ status: "idle", marker: 15 }), null, "충전 스테이션에서 쉬는 건 멈춤 아님");
+  assert.equal(robotStop({ status: "patrol", marker: 7 }), null);
+  assert.equal(robotStop({ status: "blocked", marker: 7 }), null, "막힘 정지는 따로 있음");
+  assert.equal(robotStop({ status: "idle", marker: null }), null);
+  assert.equal(robotStop(undefined), null);
+  assert.deepEqual(robotStop({ status: "idle", marker: 7 }), { hold: null, reason: null });
+  assert.deepEqual(robotStop({ status: "idle", marker: 7, hold: "line" }), { hold: "line", reason: "안전 정지: 선을 놓침" });
+  // edge/agent.py가 쓰는 hold 값은 모두 문구가 있음
+  const { HOLD_TEXT } = await import("./js/store.js");
+  const agent = (await import("node:fs")).readFileSync(new URL("../edge/agent.py", import.meta.url), "utf8");
+  const holdPats = [/_safe_halt\("(\w+)"\)/g, /self\.hold = (?:self\.hold or )?"(\w+)"/g, /self\.hold, [^=\n]*= "idle", "(\w+)"/g];
+  const holds = new Set(holdPats.flatMap((re) => [...agent.matchAll(re)].map((m) => m[1])));
+  assert.ok(holds.size >= 10, `edge/agent.py에서 hold 값을 못 찾음: ${[...holds]}`);
+  for (const h of holds) assert.ok(h in HOLD_TEXT, `HOLD_TEXT에 ${h} 문구 없음 (edge/agent.py)`);
+  assert.deepEqual(robotStop({ status: "idle", marker: 7, hold: "new_one" }), { hold: "new_one", reason: "new_one" }, "모르는 이유는 그대로");
+
+  // 지도: 멈춘 로봇은 주황 테두리
+  assert.ok(robotLayer([{ name: "MD-1", marker: 7, online: true, stopped: true }]).includes("#ff9f1a"));
+  assert.ok(!robotLayer([{ name: "MD-1", marker: 7, online: true, stopped: false }]).includes("#ff9f1a"));
+
+  // 화면: 로봇 카드 "멈춤" + 현장 확인 필요, hold가 오면 이유. 안전 현황은 그대로
+  const app = await bootApp("?fake&admin", "halt");
+  const { el, fake } = app;
+  await tickWait(20);
+  const levelBefore = el("level").textContent;
+  fake.robots.A.marker = 7;
+  fake.halt("A");
+  await tickWait();
+  const card = () => el("robot-list").innerHTML.split("<li").find((x) => x.includes(">MD-1<"));
+  assert.match(card(), /class="ok stopped"/);
+  assert.match(card(), /<span class="state">멈춤<\/span>/);
+  assert.match(card(), /현장 확인 필요/);
+  assert.ok(el("map .robots").innerHTML.includes("#ff9f1a"));
+  assert.equal(el("level").textContent, levelBefore, "안전 현황 단계는 올리지 않음");
+  fake.halt("A", "no_ack");
+  await tickWait();
+  assert.match(card(), /안전 정지: 보드가 명령에 답 없음/);
+  fake.resume("A");
+  await tickWait();
+  assert.ok(!/멈춤/.test(card()));
+  assert.ok(!el("map .robots").innerHTML.includes("#ff9f1a"));
+  app.stop();
 }
 
 // 경보 이력: 해제된 경보도 남는다. 해제 시각은 두지 않는다

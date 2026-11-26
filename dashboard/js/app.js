@@ -2,7 +2,7 @@
 // 지도: 바탕(구역, 통로, 마커, 비상구, 충전 스테이션) 위에 화재 위치, 대피 화살표, (관리자 화면) 로봇 위치를 얹는다.
 
 import {
-  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, evacView, loadHistory, alarmStats,
+  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, evacView, loadHistory, alarmStats, robotStop,
 } from "./store.js";
 import { connect, request } from "./conn.js";
 import { FakeServer } from "./fake.js";
@@ -149,8 +149,13 @@ function renderRobots(s, serverOpen, now) {
         connText = r.online ? "연결" : "끊김";
       }
 
-      // 오른쪽 위: 연결돼 있으면 상태, 아니면 끊김·확인 불가
+      // 오른쪽 위: 연결돼 있으면 상태, 아니면 끊김·확인 불가. 길 중간에 멈췄으면 "멈춤"
       let state = msg ? ROBOT_STATUS_TEXT[msg.status] ?? msg.status ?? "-" : "-";
+      const stop = r.online ? robotStop(msg) : null;
+      if (stop) {
+        state = "멈춤";
+        cls += " stopped";
+      }
       if (!r.online) state = connText;
 
       const meta = [];
@@ -171,6 +176,7 @@ function renderRobots(s, serverOpen, now) {
         <div class="top"><span class="dot"></span><span class="name">${esc(robotLabel(r.name))}</span>
           <span class="state">${esc(state)}</span></div>
         <div class="place">${esc(robotPlace(msg))}</div>
+        ${stop ? `<div class="stop-reason">${esc(stop.reason ?? "현장 확인 필요")}</div>` : ""}
         <div class="meta">${meta.join(" · ")}</div>
         ${versionLine(msg)}
       </li>`;
@@ -182,7 +188,10 @@ function renderRobots(s, serverOpen, now) {
 function renderRobotLayer(s) {
   const list = s.robots
     .filter((r) => store.robots[r.name]?.marker != null)
-    .map((r) => ({ name: robotLabel(r.name), marker: store.robots[r.name].marker, online: s.server === "open" && r.online }));
+    .map((r) => {
+      const online = s.server === "open" && r.online;
+      return { name: robotLabel(r.name), marker: store.robots[r.name].marker, online, stopped: online && !!robotStop(store.robots[r.name]) };
+    });
   document.getElementById("map").querySelector(".robots").innerHTML = robotLayer(list);
 }
 
@@ -483,7 +492,7 @@ const evacAlarm = { ringing: false, timer: null };
 function noticeEvent(msg, now = Date.now()) {
   if (!admin || msg.kind !== "event" || msg.checked || alertState.seen.has(msg.id)) return;
   alertState.seen.add(msg.id);
-  if (msg.type === "helmet") return; // 안전모 미착용은 화면 표시가 미정
+  if (msg.type === "helmet") return; // 안전모 미착용은 현장 음성 안내만 (대시보드에 안 보임)
   const first = alertState.openedAt == null || now - alertState.openedAt < SNAPSHOT_MS;
   if (first) return; // 화면을 열 때 이미 있던 경보
   if (POPUP_TYPES.includes(msg.type)) alertState.queue.push(msg.id);

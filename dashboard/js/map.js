@@ -9,7 +9,7 @@ const C = {
   bg: "#08111f", floor: "#0b1729", grid: "#13233a", wall: "#9fb2c8",
   rack: "#11213a", rackLine: "#34506f", fg: "#dbe7f5", muted: "#8aa0b9",
   green: "#3ee07a", blue: "#2aa6ff", yellow: "#f5c542", one: "#dfe9f5",
-  cyan: "#3ee0ff", off: "#8aa0b9",
+  cyan: "#3ee0ff", off: "#8aa0b9", orange: "#ff9f1a",
 };
 
 export const VIEWBOX = "40 40 1920 1330";
@@ -103,7 +103,8 @@ export function baseMap(under = "") {
   return s;
 }
 
-// 로봇 위치 층 (관리자 화면). robots: [{ name(화면 이름), marker, online }]
+// 로봇 위치 층 (관리자 화면). robots: [{ name(화면 이름), marker, online, stopped }]
+// 길 중간에 멈춘 로봇(stopped)은 주황 테두리
 // 지난 마커 위치에 그린다. 같은 마커에 여러 대면 옆으로 나란히.
 // 끊긴 로봇은 회색 점선으로 마지막 위치에 그린다.
 export function robotLayer(robots) {
@@ -118,7 +119,7 @@ export function robotLayer(robots) {
     list.forEach((r, i) => {
       const x = mx + (i - (list.length - 1) / 2) * 130;
       const y = my - 62;
-      const color = r.online ? C.cyan : C.off;
+      const color = !r.online ? C.off : r.stopped ? C.orange : C.cyan;
       const dash = r.online ? "" : ' stroke-dasharray="8 6"';
       s += `<g class="robot">`;
       s += `<line x1="${x}" y1="${y + 27}" x2="${mx}" y2="${my - 24}" stroke="${color}" stroke-width="3"${dash}/>`;
@@ -261,6 +262,7 @@ export function legendHtml({ robots = false } = {}) {
   if (robots) {
     items.push(swatch(`<circle cx="15" cy="9" r="7" fill="#062033" stroke="${C.cyan}" stroke-width="2"/>`) + "로봇 위치 (지난 마커)");
     items.push(swatch(`<circle cx="15" cy="9" r="7" fill="#062033" stroke="${C.off}" stroke-width="2" stroke-dasharray="3 2"/>`) + "끊긴 로봇 (마지막 위치)");
+    items.push(swatch(`<circle cx="15" cy="9" r="7" fill="#062033" stroke="${C.orange}" stroke-width="2"/>`) + "길 중간에 멈춘 로봇");
   }
   return items.map((t) => `<span>${t}</span>`).join("");
 }

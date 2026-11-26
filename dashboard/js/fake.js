@@ -14,6 +14,8 @@
 //   - fake.fire(로봇)      : 화재 확정까지 한 번에. 로봇이 과열·불꽃 감지 경보를 보내고, 서버가 교차 확인 끝에
 //                            대피 모드로 바꾼 것처럼 (교차 확인 과정은 흉내 내지 않음). 불난 마커는 그 로봇의 마커
 //   - fake.fire(로봇, 마커): 위와 같고, 불난 마커를 정해서
+//   - fake.halt(로봇, 이유): 길 중간에 멈춤 (state status idle). 이유(hold)를 주면 state에 hold로 실음
+//                            (진짜 엣지는 아직 안 보냄, 이슈 #22). fake.resume(로봇)으로 다시 순찰
 //
 // 대피 모드가 되면 진짜 서버(server/api.py start_evac)처럼 mode 메시지 뒤에 evac 메시지를 보낸다.
 // 대피 경로는 server/dispatch.py plan()을 옮긴 evacPlan()으로 센다.
@@ -114,6 +116,7 @@ class FakeRobot {
     this.before = null;     // 대피 모드 전 상태
     this.sonar = 120;
     this.temp = 24;
+    this.hold = null;       // 멈춘 이유 (halt로 줄 때만 state에 실음. 진짜 엣지는 아직 안 보냄, 이슈 #22)
   }
 
   state() {
@@ -125,7 +128,21 @@ class FakeRobot {
       sonar_cm: Math.round(this.sonar * 10) / 10,
       temp_c: Math.round(this.temp * 10) / 10,
       version: "fake",
+      ...(this.hold ? { hold: this.hold } : {}),
     };
+  }
+
+  // 길 중간에 멈춤: idle로 바뀌고 resume 전에는 안 움직인다 (edge/agent.py 안전 정지·wait 흉내)
+  halt(hold = null) {
+    this.status = "idle";
+    this.wait = 0;
+    this.hold = hold;
+  }
+
+  resume() {
+    if (this.status !== "idle" || this.marker === DOCK_MARKER || !this.role) return;
+    this.status = "patrol";
+    this.hold = null;
   }
 
   // 1초. 내보낼 경보 종류(없으면 null)
@@ -353,6 +370,20 @@ export class FakeServer {
     if (!EVENT_TYPES.includes(type)) throw new Error("모르는 경보: " + type);
     const r = this.robots[name] || this._pickRobot();
     return this._addEvent(r, type);
+  }
+
+  halt(name, hold = null) {
+    const r = this.robots[name] || this._pickRobot();
+    r.halt(hold);
+    this._push(this._stateMsg(r));
+    return r.name;
+  }
+
+  resume(name) {
+    const r = this.robots[name];
+    if (!r) return;
+    r.resume();
+    this._push(this._stateMsg(r));
   }
 
   // 돌려주는 값: 불꽃 감지(flame) 경보. marker: 불난 마커 (안 주면 그 로봇의 마커)
