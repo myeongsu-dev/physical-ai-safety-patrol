@@ -350,8 +350,9 @@ def check_patrol(spool):
     assert ag.status == "patrol"
     dog.sent.clear()
     dog.line = -1
-    run(ag, clock, config.LINE_LOST_S + 0.3)
-    assert ag.status == "idle" and ag.hold == "line" and dog.sent[0] == ("S",)
+    run(ag, clock, config.LINE_LOST_S + 0.3)  # 그사이 F를 다시 보낼 수 있음(MOVE_MS) → 마지막이 S
+    assert ag.status == "idle" and ag.hold == "line" and dog.sent[-1] == ("S",), dog.sent
+    dog.sent.clear()
     ag.on_command({"cmd": "resume"})
     run(ag, clock, 0.3)
     assert ag.status == "idle" and F() not in dog.sent
@@ -360,6 +361,13 @@ def check_patrol(spool):
     ag.on_command({"cmd": "resume"})
     run(ag, clock, 0.3)
     assert ag.status == "patrol" and dog.sent[-1] == F()
+    # 보드가 놓친 선을 제자리 돌며 찾다가 못 찾음(E lost) → Pi도 바로 멈춤
+    dog.inject("E", 9, "lost", 91.0)
+    run(ag, clock, 0.2)
+    assert ag.status == "idle" and ag.hold == "line", ag.status
+    ag.on_command({"cmd": "resume"})
+    run(ag, clock, 0.3)
+    assert ag.status == "patrol"
 
     # 막혀 서 있는 중에 보드가 다시 붙음 → 물건이 치워져도 저절로 출발하지 않음
     dog.sonar = 10.0

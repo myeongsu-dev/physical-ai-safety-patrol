@@ -271,7 +271,7 @@ class Agent:
             log.error("보드가 정지(S)를 못 함: %s", error)
 
     def _line_guard(self):
-        """F는 선을 놓치면(-1) 직진함 → LINE_LOST_S 넘게 선이 안 보이면 Pi가 멈춤 (line 채널을 받을 때만)"""
+        """보드가 선을 못 찾고 E lost를 못 보낸 경우의 예비: LINE_LOST_S 넘게 선이 안 보이면 Pi가 멈춤 (line 채널을 받을 때만)"""
         if not config.LINE_GUARD or "line" not in self.board.chans or self.status not in MOVING:
             self.line_lost_since = None
             return
@@ -299,6 +299,10 @@ class Agent:
                 self._halt("idle")
         elif ch == "done":
             self._move(force=True)
+        elif ch == "lost":  # 보드가 놓친 선을 제자리 돌며 찾다가 못 찾고 멈춤 (val = 돈 각도)
+            log.warning("보드가 선을 못 찾음 (%s° 돌아 봄)", val)
+            if self.status in MOVING:
+                self._safe_halt("line")
 
     def _pi_guard(self):
         """F(선 따라가기)는 보드가 초음파로 멈추지 않을 수 있어 Pi도 봄: 14cm 안 3번 연속 → 정지, 18cm 밖 → 재개"""
