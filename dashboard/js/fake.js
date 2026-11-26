@@ -3,7 +3,7 @@
 // 진짜 서버와 같은 모양으로 흉내 낸다.
 //   - fake.socket()  : new WebSocket(".../ws") 대신. onopen · onmessage · onclose · close()
 //                      붙자마자 로봇 state 전부, mode, 해제 안 된 경보를 보내고, 그 뒤로 새 메시지
-//   - fake.fetch()   : fetch() 대신. POST /events/{id}/check, POST /mode, GET /status, GET /admin/check
+//   - fake.fetch()   : fetch() 대신. POST /events/{id}/check (body {"false_alarm": true}면 오탐), POST /mode, GET /status, GET /admin/check
 //                      new FakeServer({ adminPassword: "1234" })면 진짜 서버의 관리자 잠금처럼
 //                      경보 해제·모드 변경은 헤더 X-Admin-Password가 맞아야 받는다 (틀리면 401)
 //
@@ -307,7 +307,12 @@ export class FakeServer {
     if (m && method === "POST") {
       const e = this.events.find((x) => x.id === Number(m[1]));
       if (!e) return jsonResponse(404, { detail: "이벤트 없음" });
-      e.checked = true;
+      // 진짜 서버처럼: body {"false_alarm": true}면 오탐, 없으면 정탐. 이미 닫힌 경보는 그대로
+      if (!e.checked) {
+        e.checked = true;
+        e.checked_at = Date.now() / 1000;
+        e.false_alarm = body.false_alarm === true;
+      }
       this._push({ ...e });
       return jsonResponse(200, { ...e });
     }
@@ -394,6 +399,8 @@ export class FakeServer {
       ...r.eventFields(type),
       ...extra,
       checked: false,
+      checked_at: null, // 닫은 시각(초). 안 닫혔으면 null (PR #23 서버와 같음)
+      false_alarm: null, // 오탐으로 닫았으면 true, 정탐이면 false, 안 닫혔으면 null
     };
     this.events.push(e);
     this._push({ ...e });

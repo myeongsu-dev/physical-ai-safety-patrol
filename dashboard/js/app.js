@@ -229,7 +229,7 @@ let historyKey = "";
 
 function renderHistory(shown) {
   const list = alertHistory(store);
-  const key = list.map((h) => `${h.event.id}${h.event.checked ? "c" : ""}`).join(",") + "|" + (shown?.id ?? "");
+  const key = list.map((h) => `${h.event.id}${h.event.checked ? (h.event.false_alarm ? "f" : "c") : ""}`).join(",") + "|" + (shown?.id ?? "");
   if (key === historyKey) return;
   historyKey = key;
   document.getElementById("history").innerHTML = list.length
@@ -240,14 +240,14 @@ function renderHistory(shown) {
 function historyRow(h, selected) {
   const e = h.event;
   const [label, cls] = ALERT_TEXT[e.type] ?? [e.type, ""];
-  const state = h.event.checked ? "경보 해제" : "해제 전";
+  const state = h.event.checked ? closedText(e) : "해제 전";
   return `<tr class="${selected ? "selected" : ""}">
     <td><button type="button" class="row-btn" data-alert="${e.id}" aria-pressed="${selected}">${e.ts ? clock(e.ts * 1000) : "-"}</button></td>
     <td class="type ${cls}">${esc(label)}</td>
     <td>${esc(robotLabel(e.robot))}</td>
     <td>${h.role ? `${esc(h.role)} 경로` : "-"}</td>
     <td>${e.marker != null ? `마커 ${esc(e.marker)}` : "-"}</td>
-    <td class="state ${h.event.checked ? "done" : "open"}">${state}</td>
+    <td class="state ${h.event.checked ? (e.false_alarm ? "done false-alarm" : "done") : "open"}">${state}</td>
     <td>${e.photo
       ? `<a class="photo-btn" href="${esc(e.photo)}" data-photo="${esc(e.photo)}">사진 보기</a>`
       : `<span class="no-photo">사진 없음</span>`}</td>
@@ -328,7 +328,7 @@ function alertItem(e, selected) {
 }
 
 function renderDetail(e) {
-  const key = JSON.stringify([e?.id, e?.checked, detail.pending, detail.error]);
+  const key = JSON.stringify([e?.id, e?.checked, e?.false_alarm, detail.pending, detail.error]);
   if (key === detailKey) return;
   detailKey = key;
   const el = document.getElementById("detail");
@@ -343,10 +343,10 @@ function renderDetail(e) {
         <img src="${esc(e.photo)}" alt="${esc(label)} 경보 사진"></a>`
     : `<div class="photo none">사진 없음</div>`;
 
-  // 경보 이력에서 고른 해제된 경보는 버튼 없이 "경보 해제"만
+  // 경보 이력에서 고른 해제된 경보는 버튼 없이 "경보 해제" 또는 "오탐으로 해제"만
   const past = store.history.get(e.id);
   const action = e.checked
-    ? `<p class="done-text">경보 해제</p>`
+    ? `<p class="done-text">${closedText(e)}</p>`
     : actionHtml(e);
   const err = e.checked ? "" : errorHtml(e);
 
@@ -366,12 +366,22 @@ function renderDetail(e) {
     <dl class="fields">${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>`;
 }
 
-// 경보 해제 버튼 (경보 상세 칸과 팝업이 같이 쓴다)
+// 해제한 경보의 상태 글자. 오탐이면 "오탐으로 해제" (false_alarm은 PR #23 서버부터. 없으면 경보 해제)
+function closedText(e) {
+  return e.false_alarm ? "오탐으로 해제" : "경보 해제";
+}
+
+// 경보 해제 버튼 두 개 (경보 상세 칸과 팝업이 같이 쓴다)
+//   경보 해제: 실제로 일어난 일이고 현장 조치를 확인함 (정탐)
+//   오탐: 로봇이 잘못 본 것. 서버에 오탐으로 기록해 나중에 모델을 고칠 때 쓴다
 function actionHtml(e) {
   if (detail.pending === e.id) {
-    return `<button type="button" class="check" disabled>보내는 중</button>`;
+    return `<div class="check-row"><button type="button" class="check" disabled>보내는 중</button></div>`;
   }
-  return `<button type="button" class="check" data-check="${e.id}">경보 해제</button>`;
+  return `<div class="check-row">
+    <button type="button" class="check" data-check="${e.id}">경보 해제</button>
+    <button type="button" class="check false-alarm" data-check="${e.id}" data-false-alarm="1">오탐</button>
+  </div>`;
 }
 
 function errorHtml(e) {
@@ -503,14 +513,18 @@ function renderSoundButton() {
   b.setAttribute("aria-pressed", String(alarm.enabled));
 }
 
-async function checkAlert(id) {
+// falseAlarm: 오탐으로 해제. 서버에 {"false_alarm": true}를 보낸다 (body가 없으면 정탐)
+async function checkAlert(id, falseAlarm = false) {
   const e = store.events.get(id);
   if (!e || detail.pending) return;
   detail.pending = id;
   detail.error = null;
   render();
   try {
-    const res = await adminRequest(`/events/${id}/check`, { method: "POST" });
+    const opts = falseAlarm
+      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ false_alarm: true }) }
+      : { method: "POST" };
+    const res = await adminRequest(`/events/${id}/check`, opts);
     if (!res.ok) throw new Error(`서버 응답 ${res.status}`);
     // 서버가 WebSocket으로도 checked:true를 다시 보내지만, 받은 답으로 바로 반영한다
     apply(store, await res.json());
@@ -580,7 +594,7 @@ function onClick(ev) {
       });
     }
   } else if (t.dataset.check) {
-    checkAlert(Number(t.dataset.check));
+    checkAlert(Number(t.dataset.check), t.dataset.falseAlarm === "1");
   }
 }
 

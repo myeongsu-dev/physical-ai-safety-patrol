@@ -755,6 +755,49 @@ class FakeAudioContext {
   app.stop();
 }
 
+// ---------- 오탐으로 해제 (PR #23: POST /events/{id}/check body {"false_alarm": true}) ----------
+{
+  // 가짜 서버: 진짜 서버처럼 정탐·오탐 기록, 이미 닫힌 경보는 그대로
+  const f = new FakeServer({ seed: 3, defer: (fn) => fn() });
+  const a1 = f.emit("obstacle", "A");
+  const a2 = f.emit("heat", "B");
+  assert.equal(a1.false_alarm, null);
+  assert.equal(a1.checked_at, null);
+  const post = (id, body) => f.fetch(`/events/${id}/check`, { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) });
+  const r1 = await (await post(a1.id)).json();
+  assert.equal(r1.checked, true);
+  assert.equal(r1.false_alarm, false, "body 없으면 정탐");
+  assert.equal(typeof r1.checked_at, "number");
+  assert.equal((await (await post(a2.id, { false_alarm: true })).json()).false_alarm, true);
+  assert.equal((await (await post(a1.id, { false_alarm: true })).json()).false_alarm, false, "이미 닫힌 건 그대로");
+
+  // 화면: 경보 상세에 경보 해제 · 오탐 두 버튼, 오탐을 누르면 서버에 오탐으로 기록되고 이력에 "오탐으로 해제"
+  const app = await bootApp("?fake&admin", "false-alarm");
+  const { el, fake } = app;
+  const ob = fake.emit("obstacle", "C");
+  await tickWait();
+  await app.click({ alert: String(ob.id) });
+  const d = el("detail").innerHTML;
+  assert.match(d, new RegExp(`data-check="${ob.id}">경보 해제</button>`));
+  assert.match(d, new RegExp(`data-check="${ob.id}" data-false-alarm="1">오탐</button>`));
+  await app.click({ check: String(ob.id), falseAlarm: "1" });
+  await tickWait();
+  const sent = fake.events.find((x) => x.id === ob.id);
+  assert.equal(sent.checked, true);
+  assert.equal(sent.false_alarm, true);
+  assert.match(el("history").innerHTML, /<td class="state done false-alarm">오탐으로 해제<\/td>/);
+  await app.click({ alert: String(ob.id) });
+  assert.match(el("detail").innerHTML, /<p class="done-text">오탐으로 해제<\/p>/);
+  // 정탐은 그대로 "경보 해제"
+  const ob2 = fake.emit("floor_object", "D");
+  await tickWait();
+  await app.click({ check: String(ob2.id) });
+  await tickWait();
+  assert.equal(fake.events.find((x) => x.id === ob2.id).false_alarm, false);
+  assert.match(el("history").innerHTML, /<td class="state done">경보 해제<\/td>/);
+  app.stop();
+}
+
 // 경보 이력: 해제된 경보도 남는다. 해제 시각은 두지 않는다
 {
   const st = createStore();

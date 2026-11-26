@@ -455,3 +455,10 @@ ul { list-style: none; margin: 0; padding: 0; }
 .login-btn:disabled { opacity: 0.6; cursor: default; }
 .login-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .login-back { color: var(--muted); font-size: 14px; }
+
+/* ---------- 경보 해제 · 오탐 (경보 상세 칸, 팝업) ---------- */
+/* 경보 해제가 넓고, 오탐은 테두리만. 상세 칸 · 팝업의 width: 100%보다 뒤에 둔다 */
+.check-row { display: flex; gap: var(--gap); }
+.check-row .check { width: auto; flex: 2 1 0; }
+.check-row .check.false-alarm { flex: 1 1 0; background: var(--panel); color: var(--text); }
+.check-row .check.false-alarm:hover { background: var(--bg); }
