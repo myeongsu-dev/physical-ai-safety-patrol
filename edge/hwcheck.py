@@ -173,9 +173,10 @@ def c_drive(a):
     link = _open_dog(a)
     if not link:
         return 1
-    st = BoardState("bat,sonar,line")
+    chans = "bat,sonar,line,far,steer,pitch,roll,yaw"  # far·steer·pitch·roll은 dog-1.5.0, yaw는 1.6.0부터 (없으면 -1)
+    st = BoardState(chans)
     link.send("V")
-    link.send("T", config.STREAM_MS, "bat,sonar,line")
+    link.send("T", config.STREAM_MS, chans)
     _read(link, st, 1.0)
     if not _verdict(st.version is not None, f"V 응답 (버전 {st.version})"):
         link.close()
@@ -211,11 +212,16 @@ def c_drive(a):
                 d = st.sonar_cm
                 near = near + 1 if d is not None and d < config.SONAR_STOP_CM else 0
                 lost_since = None if line_side(st.line) != "lost" else (lost_since or now)
-                if now - shown > 0.4:
+                if now - shown > 0.15:  # 측정값마다 (먼 구역 x · 조향 각도 · IMU 앞뒤·좌우 기울기도)
                     shown = now
-                    print(f"  {now - t0:4.1f}s line {st.line} {line_side(st.line):8} sonar {d}")
+                    v = st.values
+                    print(f"  {now - t0:4.1f}s line {st.line} {line_side(st.line):8} far {v.get('far')} "
+                          f"steer {v.get('steer')} pitch {v.get('pitch')} roll {v.get('roll')} yaw {v.get('yaw')} sonar {d}")
             elif p and p[0] == "E" and len(p) > 2 and p[2] == "done":
                 reason = "보드 이동 시간 끝(done)"
+                break
+            elif p and p[0] == "E" and len(p) > 3 and p[2] == "lost":
+                reason = f"보드가 선을 못 찾음 ({p[3]}° 돌아 봄)"
                 break
             elif p and p[0] == "!":
                 reason, ok = "보드 오류 " + "|".join(p), False

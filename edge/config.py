@@ -56,7 +56,7 @@ MOVE_MS = _get("MOVE_MS", 10000, _int)                   # 보드 최대 15초 �
 ACK_TIMEOUT_S = _get("ACK_TIMEOUT_S", 1.5, float)        # F를 보낸 뒤 보드 ok·!를 기다리는 시간. 없으면 멈춤
 SENSOR_STALE_S = _get("SENSOR_STALE_S", 1.0, float)     # 걷는 중 측정값(D)이 이만큼 안 오면 Pi가 멈춤 (보드 끊김·재시작)
 LINE_GUARD = _get("LINE_GUARD", 1, _int)                 # 선을 못 찾으면(line=-1) Pi가 멈춤 (보드 F는 선을 놓치면 직진함)
-LINE_LOST_S = _get("LINE_LOST_S", 1.0, float)            # 선이 이만큼 계속 안 보이면 멈춤
+LINE_LOST_S = _get("LINE_LOST_S", 10.0, float)           # 선이 이만큼 계속 안 보이면 멈춤 (보드가 먼저 0.6초 걸으며 꺾고 최대 8초 제자리 돌며 찾은 뒤 E lost를 보냄, 이건 그 뒤 예비)
 PI_GUARD = _get("PI_GUARD", 1, _int)                     # F(선 따라가기) 중 Pi도 초음파로 멈춤(보조)
 SONAR_STOP_CM = _get("SONAR_STOP_CM", 14.0, float)
 SONAR_RESUME_CM = _get("SONAR_RESUME_CM", 18.0, float)
