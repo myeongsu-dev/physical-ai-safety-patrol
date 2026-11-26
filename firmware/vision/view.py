@@ -1,23 +1,17 @@
-"""비전 모듈 영상 보기 (patrol_cam 펌웨어, 디버깅용). Pi·PC에서 켜 둔 동안만 브라우저로 본다.
+"""비전 모듈 영상 보기 (patrol_cam 펌웨어). 모듈 USB가 꽂힌 기기(Pi·PC)에서 실행하고 브라우저로 본다.
 
-  python firmware/vision/view.py [포트] [--url URL] [--thr N] [--http 8090]
+  python firmware/vision/view.py [포트] [--thr N] [--http 8090]
   → 같은 네트워크의 브라우저에서 http://<이 기기 주소>:8090
-  python firmware/vision/view.py [포트] --wifi   # 모듈에 Wi-Fi 저장 (USB로 한 번)
   화면은 web/view.html. "카메라 각도 맞추기 → 시작"을 누른 동안만 각도를 재고, MechDog 옆모습(web/mechdog.glb,
   CAD 빌드 결과 복사본)의 카메라를 같이 돌린다. three.js도 web/three/에 있어 인터넷 없이 돈다.
 
-영상은 USB 포트가 있으면 USB, 없으면 Wi-Fi(모듈의 /stream), 둘 다 없으면 붙을 때까지 기다린다. 꽂고 뽑는 대로 바뀐다.
-포트를 안 주면 .env의 VISION_PORT, URL은 VISION_URL(없으면 http://patrol-cam.local/stream).
-켜는 동안만 영상을 보내고, 끄면 멈춘다. 검은 선 찾기는 영상과 상관없이 계속 돈다.
---thr로 검정 기준 밝기를 바꾸면 모듈에 저장된다(USB일 때만).
+포트를 안 주면 .env의 VISION_PORT. 켜는 동안만 영상을 보내고(STREAM 1), 끄면 멈춘다(STREAM 0).
+검은 선 찾기는 영상과 상관없이 계속 돈다. --thr로 검정 기준 밝기를 바꾸면 모듈에 저장된다.
 """
 import argparse
-import getpass
 import json
 import math
-import os
 import sys
-import urllib.request
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,7 +25,7 @@ from edge.camera import split_jpegs  # noqa: E402
 BAUD = 460800  # patrol_cam.ino와 같게
 WEB = Path(__file__).resolve().parent / "web"
 TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".glb": "model/gltf-binary"}
-latest = {"jpg": None, "n": 0, "fps": 0.0, "src": "", "calib": False, "kind": "", "title": "", "text": "", "deg": None, "lens_cm": None}
+latest = {"jpg": None, "n": 0, "fps": 0.0, "calib": False, "kind": "", "title": "", "text": "", "deg": None, "lens_cm": None}
 
 # ---- 출발 전 카메라 각도 판정 (곧은 테이프 한 줄을 가운데에 두고) ----
 # 바닥의 곧은 테이프 폭 w는 화면 줄 v(가운데 0, 아래 +)에 대해 직선 w = k·(v - v_h)이고, v_h는 지평선 줄.
@@ -155,94 +149,15 @@ def open_port(port):
     return s
 
 
-def reader(read):
-    """read()가 주는 바이트에서 JPEG를 잘라 latest에 넣음. read()가 None이면 끝"""
+def reader(s):
     buf = b""
-    while (chunk := read()) is not None:
-        buf += chunk
+    while True:
+        buf += s.read(s.in_waiting or 1)
         frames, buf = split_jpegs(buf)
         for f in frames:
             latest["jpg"], latest["n"] = f, latest["n"] + 1
         if len(buf) > 200_000:  # 깨진 장이 쌓이지 않게
             buf = b""
-
-
-usb = {"s": None}  # 지금 열린 USB 포트 (끌 때 STREAM 0)
-
-
-def read_usb(port, thr):
-    s = usb["s"] = open_port(port)
-    try:
-        if thr:
-            s.write(b"THR %d\n" % thr)
-        s.write(b"STREAM 1\n")
-        latest["src"] = "USB"
-        last = [time.time(), latest["n"]]
-
-        def read():
-            if latest["n"] != last[1]:
-                last[:] = [time.time(), latest["n"]]
-            elif time.time() - last[0] > 2:  # 모듈이 다시 켜지면(전원 흔들림 · USB 다시 꽂음) 영상이 꺼진 채라 다시 켬
-                s.write(b"STREAM 1\n")
-                last[0] = time.time()
-            return s.read(s.in_waiting or 1)
-        reader(read)
-    finally:
-        usb["s"] = None
-        try:
-            s.close()
-        except OSError:
-            pass
-
-
-def read_wifi(url, port):
-    with urllib.request.urlopen(url, timeout=5) as r:
-        latest["src"] = "Wi-Fi"
-        reader(lambda: None if port and os.path.exists(port) else (r.read1(65536) or None))  # USB가 꽂히면 USB로
-
-
-def sources(port, url, thr):
-    """USB 포트가 있으면 USB, 없으면 Wi-Fi, 둘 다 안 되면 1초 뒤 다시"""
-    while True:
-        try:
-            if port and os.path.exists(port):
-                read_usb(port, thr)
-            else:
-                read_wifi(url, port)
-        except OSError:  # 뽑힘 · Wi-Fi 끊김 · 모듈 꺼짐 (serial.SerialException도 OSError)
-            pass
-        latest["src"] = ""
-        time.sleep(1)
-
-
-def set_wifi(port):
-    """USB로 모듈에 Wi-Fi 이름·비밀번호를 저장. 비밀번호는 화면·기록에 남기지 않음"""
-    s = open_port(port)
-    s.write(b"STREAM 0\nSCAN\n")
-    print("모듈에 보이는 Wi-Fi (2.4GHz만, 세기 이름):")
-    end, found = time.time() + 8, False
-    while time.time() < end:
-        ln = s.readline().decode(errors="ignore").strip()
-        if ln.startswith("SCAN "):
-            print("  " + ln[5:])
-            found = True
-        elif ln.startswith("INFO") and found:  # SCAN 목록 뒤의 INFO = 목록 끝
-            break
-    ssid = input("Wi-Fi 이름 (비우면 Wi-Fi 끔): ").strip()
-    pw = getpass.getpass("비밀번호: ") if ssid else ""
-    s.write(("WIFI %s\t%s\n" % (ssid, pw)).encode())
-    end = time.time() + 20
-    while time.time() < end:  # 붙었는지 INFO로 확인
-        time.sleep(2)
-        s.write(b"INFO\n")
-        for ln in s.read(s.in_waiting or 1).decode(errors="ignore").splitlines():
-            if ln.startswith("INFO") and "wifi=" in ln:
-                ip = ln.split("wifi=")[1].split()[0]
-                if ip not in ("connecting",):
-                    print("Wi-Fi:", ip, "(영상 http://patrol-cam.local/stream)" if ip != "off" else "")
-                    return s.close()
-    print("20초 안에 못 붙음. 이름·비밀번호(대소문자)와 2.4GHz인지 확인")
-    s.close()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -290,17 +205,17 @@ def main():
     ap.add_argument("port", nargs="?", default=config._get("VISION_PORT", None))
     ap.add_argument("--thr", type=int, help="검정 기준 밝기 1~254 (작을수록 더 검은 것만)")
     ap.add_argument("--http", type=int, default=8090)
-    ap.add_argument("--url", default=config._get("VISION_URL", "http://patrol-cam.local/stream"), help="Wi-Fi 영상 주소")
-    ap.add_argument("--wifi", action="store_true", help="모듈에 Wi-Fi 저장 (USB 필요)")
     ap.add_argument("--selftest", action="store_true", help="각도 판정 자체 확인만 하고 끝냄")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
-    if a.wifi:
-        if not (a.port and os.path.exists(a.port)):
-            sys.exit("모듈 USB를 꽂고 포트를 주거나 .env에 VISION_PORT를 적으세요 (찾기: python -m edge.hwcheck ports)")
-        return set_wifi(a.port)
-    threading.Thread(target=sources, args=(a.port, a.url, a.thr), daemon=True).start()
+    if not a.port:
+        sys.exit("포트를 주거나 .env에 VISION_PORT를 적으세요 (찾기: python -m edge.hwcheck ports)")
+    s = open_port(a.port)
+    if a.thr:
+        s.write(b"THR %d\n" % a.thr)
+    s.write(b"STREAM 1\n")
+    threading.Thread(target=reader, args=(s,), daemon=True).start()
     srv = ThreadingHTTPServer(("0.0.0.0", a.http), Handler)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     print("영상: http://<이 기기 주소>:%d  (끝내기 Ctrl-C)" % a.http)
@@ -314,19 +229,16 @@ def main():
             if tick % 4 == 0:
                 latest["fps"] = (latest["n"] - last) / 2
                 last = latest["n"]
-                print("%s 받은 장 %d (초당 %.1f)" % (latest["src"] or "연결 없음", last, latest["fps"])
+                if latest["fps"] == 0:  # 모듈이 다시 켜지면(전원 흔들림 · USB 다시 꽂음) 영상이 꺼진 채라 다시 켬
+                    s.write(b"STREAM 1\n")
+                print("받은 장 %d (초당 %.1f)" % (last, latest["fps"])
                       + (" | 각도: %s %s" % (latest["title"], latest["text"]) if latest["calib"] else ""))
     except KeyboardInterrupt:
         pass
     finally:
-        s = usb["s"]
-        if s:
-            try:
-                s.write(b"STREAM 0\n")
-                time.sleep(0.2)
-            except OSError:
-                pass
-
+        s.write(b"STREAM 0\n")
+        time.sleep(0.2)
+        s.close()
 
 if __name__ == "__main__":
     main()

@@ -75,7 +75,7 @@ async function poll() {
   try {
     const s = await (await fetch("/state")).json();
     cfg = s;
-    $("fps").textContent = s.src ? `${s.src} · 초당 ${s.fps.toFixed(1)}장` : "모듈 연결 없음 (USB · Wi-Fi)";
+    $("fps").textContent = `초당 ${s.fps.toFixed(1)}장`;
     $("fps").classList.toggle("off", s.fps < 1);
     calib = s.calib;
     $("calib").textContent = calib ? "끝내기" : "시작";
