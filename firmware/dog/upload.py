@@ -6,6 +6,8 @@
 올린 뒤 reset도 하므로 쓰지 않는다. 여기서는 재시작되지 않게 열고, Ctrl-C로 main을 멈춘 뒤(로봇은 선 채 정지)
 raw REPL로 파일을 쓰고 바로 다시 실행한다. 이전 파일은 보드에 main_prev.py로 남는다.
 """
+import hashlib
+import re
 import subprocess
 import sys
 import time
@@ -34,6 +36,20 @@ def run(s, code):
     return out.decode(errors="replace").strip()
 
 
+def code_hash(data):
+    """main.py 내용의 짧은 해시. 줄바꿈(CRLF·LF)이 달라도 같은 코드면 같게. edge/hwcheck.py도 같은 방식으로 비교"""
+    return hashlib.sha1(data.replace(b"\r\n", b"\n")).hexdigest()[:6]
+
+
+def stamp(data):
+    """VERSION = "dog-1.1.0" → "dog-1.1.0+해시". 보드 V 응답만 보고 저장소의 어느 main.py인지 알 수 있게"""
+    out, n = re.subn(rb'^VERSION = "([^"+]*)[^"]*"', lambda m: b'VERSION = "%s+%s"' % (m.group(1), code_hash(data).encode()),
+                     data, count=1, flags=re.M)
+    if not n:
+        raise RuntimeError('main.py에 VERSION = "..." 줄이 없음')
+    return out
+
+
 def busy(port):
     """Linux: 다른 프로그램(edge.agent 등)이 포트를 잡고 있으면 True. fuser가 없으면 확인 안 함"""
     try:
@@ -47,7 +63,8 @@ def main(port):
 
     if sys.platform != "win32" and busy(port):  # 같이 열면 두 프로그램이 보드 답을 나눠 읽음
         sys.exit("%s를 다른 프로그램이 쓰는 중입니다. edge.agent 등을 멈추고 다시 하세요" % port)
-    data = SRC.read_bytes()
+    src = SRC.read_bytes()
+    data, want = stamp(src), code_hash(src)
     s = serial.Serial()
     s.port, s.baudrate, s.timeout = port, 115200, 0.1
     if sys.platform == "win32":  # Windows는 열기 전에 꺼 둬야, Linux는 커널이 켠 그대로 둬야 재시작되지 않음
@@ -59,6 +76,11 @@ def main(port):
         s.reset_input_buffer()
         s.write(b"\x01")  # raw REPL
         read_until(s, b"raw REPL; CTRL-B to exit\r\n>")
+        # 지난 실행이 남긴 것을 비움: 재시작 없이 여러 번 다시 실행하면 메모리가 모자라 새 main.py를 못 띄움
+        # (2026-11-26 MemoryError). st를 바꾸면 스트림 스레드가 조용히 끝나고(while st is me), 나머지 전역을 지운 뒤 gc
+        run(s, "st=None")
+        time.sleep(0.3)
+        run(s, "import gc\nfor k in [k for k in globals() if k not in ('gc', '__name__')]:\n del globals()[k]\ngc.collect()")
         # main_new.py에 다 쓰고 크기가 맞을 때만 바꿔 끼움. 중간에 끊겨도 main.py와 main_prev.py는 그대로
         run(s, "import os\nf=open('main_new.py','wb')\nw=f.write")
         for i in range(0, len(data), CHUNK):
@@ -80,7 +102,10 @@ def main(port):
             buf += s.read(s.in_waiting)
         if b"CMD|V|" not in buf:
             raise RuntimeError("main.py는 올렸지만 V에 답하지 않음: %r" % buf[-200:])
-        print("올림: main.py %d바이트, 다시 실행해 V 응답 확인" % size)
+        ver = buf.split(b"CMD|V|")[1].split(b"|")[0].decode(errors="replace")
+        if not ver.endswith("+" + want):
+            raise RuntimeError("V 응답의 버전 %s가 올린 코드(+%s)와 다름" % (ver, want))
+        print("올림: main.py %d바이트, 다시 실행해 V 응답 확인 (버전 %s)" % (size, ver))
     finally:
         s.close()
 
