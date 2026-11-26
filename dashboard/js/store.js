@@ -25,8 +25,9 @@ export function createStore() {
     seen: {}, // 로봇 이름 → 마지막으로 연락된 시각 (ms). 모르면 null
     offline: {}, // 로봇 이름 → 서버가 끊겼다고 알려 줌 (online:false)
     mode: "normal",
-    guides: [], // 대피 화살표 [{ marker, dir, exit, path }] (제안 모양). 대피 모드일 때만
-    fire: null, // 화재 위치 { segment, zones } (제안 모양). 서버가 화재를 확정해 대피 모드로 바꿀 때만
+    // 대피 안내 { fire, exits, arrows }. 서버가 대피 모드로 바꾸면 mode 메시지 다음에 보내는 evac 메시지 (server/dispatch.py).
+    // fire: 불난 마커(관리자가 직접 대피로 바꾸면 null), exits: 출구 마커, arrows: [{ marker, dir, exit, path }] 마커마다
+    evac: null,
     events: new Map(), // id → 해제 안 된 경보
     // 경보 이력: id → { event, role }. 해제된 경보도 남긴다 (event.checked).
     // 서버에 지난 경보를 꺼내 주는 요청이 아직 없어서, 이 화면을 연 뒤에 받은 경보만 남는다
@@ -57,9 +58,13 @@ export function apply(store, msg, now = Date.now()) {
     }
   } else if (msg.kind === "mode") {
     store.mode = msg.mode;
-    // 대피 화살표 (서버와 정하는 중인 제안 모양, README "서버와 주고받기"). 없으면 빈 목록
-    store.guides = msg.mode === "evacuate" && Array.isArray(msg.guides) ? msg.guides : [];
-    store.fire = msg.mode === "evacuate" && msg.fire && typeof msg.fire === "object" ? msg.fire : null;
+    if (msg.mode !== "evacuate") store.evac = null; // 평상시로 돌아가면 대피 안내도 끝 (서버는 따로 알리지 않음)
+  } else if (msg.kind === "evac") {
+    store.evac = {
+      fire: Number.isInteger(msg.fire) ? msg.fire : null,
+      exits: Array.isArray(msg.exits) ? msg.exits : [],
+      arrows: Array.isArray(msg.arrows) ? msg.arrows : [],
+    };
   } else if (msg.kind === "event") {
     if (msg.checked) store.events.delete(msg.id);
     else store.events.set(msg.id, msg);
@@ -132,13 +137,10 @@ export function openAlerts(store, limit = 5) {
     .slice(0, limit);
 }
 
-// 지도에 그릴 화재 위치: 대피 모드 메시지에 서버가 붙인 통로 구간(segment)과 의심 구역(zones).
-// 불꽃 감지(flame) 경보만으로는 그리지 않는다. 화재는 서버가 확정한 것만 보여 준다.
-// 서버와 정하는 중인 제안 모양이라, 값이 없으면 아무것도 그리지 않는다
-export function firePlaces(store) {
-  const f = store.fire;
-  if (store.mode !== "evacuate" || !f || !(Array.isArray(f.segment) || Array.isArray(f.zones))) return [];
-  return [{ segment: Array.isArray(f.segment) ? f.segment : null, zones: Array.isArray(f.zones) ? f.zones : [] }];
+// 지도에 그릴 대피 안내: 대피 모드일 때 서버가 보낸 evac 메시지. 아니면 null.
+// 불꽃 감지(flame) 경보만으로는 그리지 않는다. 화재는 서버가 확정한 것만 보여 준다
+export function evacView(store) {
+  return store.mode === "evacuate" ? store.evac : null;
 }
 
 // 로봇 위치를 글자로. 예: "A 경로 · 마커 8", "충전 스테이션", "마커 14"

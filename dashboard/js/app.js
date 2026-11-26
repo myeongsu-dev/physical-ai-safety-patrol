@@ -2,7 +2,7 @@
 // 지도: 바탕(구역, 통로, 마커, 비상구, 충전 스테이션) 위에 화재 위치, 대피 화살표, (관리자 화면) 로봇 위치를 얹는다.
 
 import {
-  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, firePlaces,
+  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, evacView,
 } from "./store.js";
 import { connect } from "./conn.js";
 import { VIEWBOX, baseMap, legendHtml, robotLayer, fireLayer, guideLayer, MARKER_POS } from "./map.js";
@@ -89,18 +89,17 @@ function render() {
   if (admin) renderRobotLayer(s);
 }
 
-// 화재 위치와 대피 화살표 (두 화면 모두). 서버가 값을 보내지 않으면 빈 층
-// 대피 표시는 서버가 끊겨도 내리지 않는 것처럼, 화살표도 마지막으로 받은 값을 그대로 둔다
+// 화재 위치와 대피 안내 (두 화면 모두). 서버가 evac 메시지를 보내지 않으면 빈 층
+// 대피 표시는 서버가 끊겨도 내리지 않는 것처럼, 대피 안내도 마지막으로 받은 값을 그대로 둔다
 let fireKey = "";
 function renderFireLayers() {
-  const fires = firePlaces(store);
-  const guides = store.mode === "evacuate" ? store.guides : [];
-  const key = JSON.stringify([fires, guides]);
+  const evac = evacView(store);
+  const key = JSON.stringify(evac);
   if (key === fireKey) return;
   fireKey = key;
   const map = document.getElementById("map");
-  map.querySelector(".fire").innerHTML = fireLayer(fires);
-  map.querySelector(".guides").innerHTML = guideLayer(guides);
+  map.querySelector(".fire").innerHTML = fireLayer(evac?.fire);
+  map.querySelector(".guides").innerHTML = guideLayer(evac);
 }
 
 // 현재 모드와 안전 현황. 서버가 끊겨 있으면 모를 값은 "-"

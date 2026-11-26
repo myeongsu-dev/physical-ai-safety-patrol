@@ -7,9 +7,9 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN } from "./js/mapdata.js";
-import { FakeServer, EVENT_TYPES, PLACE_SAMPLE } from "./js/fake.js";
-import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, firePlaces, ONLINE_SEC } from "./js/store.js";
+import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN, RETURN_POINT, EXITS } from "./js/mapdata.js";
+import { FakeServer, EVENT_TYPES, evacPlan } from "./js/fake.js";
+import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, evacView, ONLINE_SEC } from "./js/store.js";
 import { robotLayer, fireLayer, guideLayer, corridorPoints, MARKER_POS } from "./js/map.js";
 
 // ---------- 1) 지도 데이터 ----------
@@ -17,7 +17,8 @@ function readMapConfig() {
   const code =
     "import json; from server import map_config as m, fleet; " +
     "print(json.dumps({'markers': {k: list(v['xy']) for k, v in m.MARKERS.items()}, " +
-    "'routes': m.ROUTES, 'dock': m.DOCK_MARKER, 'ret': m.BATTERY_RETURN, 'online': fleet.ONLINE_SEC}))";
+    "'routes': m.ROUTES, 'dock': m.DOCK_MARKER, 'ret': m.BATTERY_RETURN, 'online': fleet.ONLINE_SEC, " +
+    "'retpt': {k: v['marker'] for k, v in m.RETURN_POINT.items()}, 'exits': getattr(m, 'EXITS', None)}))";
   for (const py of ["python3", "python"]) {
     try {
       return JSON.parse(execFileSync(py, ["-c", code], { encoding: "utf8" }));
@@ -36,6 +37,11 @@ if (cfg) {
   assert.equal(DOCK_MARKER, cfg.dock);
   assert.equal(BATTERY_RETURN, cfg.ret);
   assert.equal(ONLINE_SEC, cfg.online, "store.js ONLINE_SEC가 server/fleet.py와 다름");
+  assert.deepEqual(RETURN_POINT, cfg.retpt, "mapdata.js RETURN_POINT가 map_config.py와 다름");
+  // EXITS는 PR #23부터. 서버 설정이 아직 다르면 대시보드 CI를 막지 않고 알리기만 한다
+  if (cfg.exits && JSON.stringify(cfg.exits) !== JSON.stringify(EXITS)) {
+    console.log(`알림: 대피 출구가 다름. 대시보드 ${JSON.stringify(EXITS)}, server/map_config.py ${JSON.stringify(cfg.exits)}`);
+  }
 } else {
   console.log("python을 못 찾아 지도 비교는 건너뜀");
 }
@@ -104,11 +110,19 @@ assert.ok(!openIds.includes(first.id) && openIds.length === EVENT_TYPES.length -
 // 모드
 res = await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "evacuate" }) });
 assert.equal((await res.json()).mode, "evacuate");
-assert.deepEqual(a.msgs.at(-1), { kind: "mode", mode: "evacuate" });
+// 진짜 서버처럼 mode 다음에 evac (관리자가 바꾼 것이라 불난 마커는 모름)
+assert.deepEqual(a.msgs.at(-2), { kind: "mode", mode: "evacuate" });
+assert.deepEqual(a.msgs.at(-1), { kind: "evac", fire: null, exits: EXITS, arrows: evacPlan(null) });
+const cSock = fake.socket();
+const c = listen(cSock);
+flush();
+assert.deepEqual(c.msgs.filter((m) => m.kind === "mode" || m.kind === "evac").map((m) => m.kind), ["mode", "evac"], "새로 붙어도 evac을 받음");
+cSock.close();
 fake.tick();
 assert.ok(a.msgs.filter((m) => m.kind === "state").slice(-4).every((m) => m.status === "guide"));
 assert.equal((await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "x" }) })).status, 400);
 await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
+assert.ok(!fake._snapshot().some((m) => m.kind === "evac"), "평상시로 돌아가면 evac 없음");
 
 
 // ---------- 3) 로봇 연결 끊김 ----------
@@ -255,7 +269,7 @@ assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(N
   assert.equal(new Set(xs).size, 3);
 }
 
-// ---------- 화재 위치와 대피 화살표 (제안 모양) ----------
+// ---------- 화재 위치와 대피 안내 (서버 evac 메시지) ----------
 {
   // 통로 구간: 직선, 꺾이는 곳(줄기), 이어지지 않는 마커
   assert.deepEqual(corridorPoints(5, 6), [MARKER_POS[5], MARKER_POS[6]]);
@@ -263,42 +277,66 @@ assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(N
   assert.equal(corridorPoints(14, 11).length, 3);
   assert.equal(corridorPoints(1, 13), null);
   assert.equal(corridorPoints(1, 99), null);
-  // 예시 값의 길은 모두 통로로 이어진다
-  for (const g of PLACE_SAMPLE.guides) {
-    for (let i = 0; i + 1 < g.path.length; i++) assert.ok(corridorPoints(g.path[i], g.path[i + 1]), `${g.path} 이어지지 않음`);
+
+  // 가짜 서버 대피 경로 (server/dispatch.py plan과 같은 값. python에 dispatch.plan이 있으면 직접 비교)
+  const plan7 = evacPlan(7);
+  assert.equal(plan7.length, 15);
+  assert.deepEqual(plan7.find((a) => a.marker === 7), { marker: 7, dir: "x", exit: null, path: [] }, "불난 마커는 x");
+  assert.ok(plan7.every((a) => !a.path.includes(7)), "불난 마커를 지나지 않음");
+  assert.deepEqual(plan7.find((a) => a.marker === 15), { marker: 15, dir: "N", exit: 5, path: [15, 14, 11, 10, 5] });
+  assert.deepEqual(plan7.find((a) => a.marker === 3), { marker: 3, dir: "E", exit: 8, path: [3, 4, 8] });
+  assert.equal(plan7.find((a) => a.marker === 5).dir, "here");
+  assert.ok(evacPlan(5).every((a) => a.dir === "x" || a.exit === 8), "5번 출구가 불나면 모두 8번으로");
+  assert.ok(evacPlan(null, [15]).every((a) => a.dir === "here" ? a.marker === 15 : a.exit === 15), "출구를 바꿔 넣을 수 있음");
+  for (const f of [null, 7]) {
+    for (const a of evacPlan(f)) {
+      for (let i = 0; i + 1 < a.path.length; i++) assert.ok(corridorPoints(a.path[i], a.path[i + 1]), `${a.path} 지도 통로로 안 이어짐`);
+    }
+  }
+  try {
+    const code = `import json; from server import dispatch; print(json.dumps([dispatch.plan(fire=f, exits=${JSON.stringify(EXITS)}) for f in [None, *range(1, 16)]]))`;
+    const py = JSON.parse(execFileSync("python", ["-c", code], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
+    [null, ...Array.from({ length: 15 }, (_, i) => i + 1)].forEach((f, i) => assert.deepEqual(evacPlan(f), py[i], `fire ${f}: dispatch.plan과 다름`));
+  } catch (e) {
+    if (e instanceof assert.AssertionError) throw e; // dispatch.plan이 없는 서버(PR #23 전)면 건너뜀
   }
 
-  let svg = fireLayer([{ segment: [5, 6], zones: ["A1", "B1"] }]);
-  assert.equal((svg.match(/class="fire-zone"/g) || []).length, 2);
-  assert.equal((svg.match(/화재 의심/g) || []).length, 2);
-  assert.ok(svg.includes('class="fire-segment" points="340,553 773,553"'));
-  // 모르는 구역, 이어지지 않는 구간은 그리지 않는다
-  assert.equal(fireLayer([{ segment: [1, 13], zones: ["Z9"] }]), "");
-  assert.equal(fireLayer([{ segment: null, zones: ["A2"] }]).match(/fire-segment/), null);
+  // 화재 층: 마커 둘레, 모르는 마커는 안 그림
+  assert.match(fireLayer(7), /class="fire-marker" cx="1220" cy="553"/);
+  assert.match(fireLayer(7), /화재/);
+  assert.equal(fireLayer(null), "");
+  assert.equal(fireLayer(99), "");
 
-  svg = guideLayer(PLACE_SAMPLE.guides);
-  assert.equal((svg.match(/class="guide-arrow"/g) || []).length, 3);
-  assert.equal((svg.match(/class="guide-path"/g) || []).length, 3);
-  assert.ok(svg.includes("1650,553 1738,553"), "8번에서 비상구 2 문까지");
-  assert.ok(svg.includes("rotate(0)"), "E 방향");
-  svg = guideLayer([{ marker: 5, dir: "W", exit: 1, path: [5] }, { marker: 99, dir: "N" }, { marker: 3, dir: "X" }]);
-  assert.equal((svg.match(/class="guide-arrow"/g) || []).length, 1, "없는 마커·방향은 화살표 없음");
-  assert.ok(svg.includes("340,553 258,553"), "마커 하나뿐인 길은 그 마커에서 문까지");
-  assert.equal(guideLayer([{ marker: 2, dir: "E", exit: 2, path: [2, 13] }]).match(/guide-path/), null, "이어지지 않는 길은 안 그림");
+  // 대피 층: 화살표는 N·E·S·W만, 같은 통로는 한 번, 출구 표시, 불 아닌 x는 갈 수 없음 표시
+  let svg = guideLayer({ fire: 7, exits: EXITS, arrows: plan7 });
+  assert.equal((svg.match(/class="guide-arrow"/g) || []).length, 12, "15개 중 불난 7(x)과 출구 5·8(here) 빼고");
+  const edges = new Set(plan7.flatMap((a) => a.path.slice(1).map((m, i) => [a.path[i], m].sort((x, y) => x - y).join("-"))));
+  assert.equal((svg.match(/class="guide-path"/g) || []).length, edges.size + 2, "같은 통로는 한 번만, 출구 두 곳은 문까지 한 줄씩 더");
+  assert.equal((svg.match(/class="guide-exit"/g) || []).length, 2);
+  assert.ok(svg.includes("340,553 258,553") && svg.includes("1650,553 1738,553"), "출구에서 비상구 문까지");
+  assert.equal(svg.match(/guide-blocked/), null, "불난 마커는 화재 층이 그림");
+  svg = guideLayer({ fire: null, exits: [5, 8], arrows: [{ marker: 6, dir: "W", exit: 5, path: [6, 5] }, { marker: 3, dir: "x", exit: null, path: [] }] });
+  assert.ok(svg.includes("340,553 258,553"), "5번 출구는 비상구 1 문까지");
+  assert.ok(svg.includes("1650,553 1738,553"), "8번 출구는 비상구 2 문까지");
+  assert.equal((svg.match(/guide-blocked/g) || []).length, 1, "갈 수 없는 마커");
+  svg = guideLayer({ exits: [], arrows: [{ marker: 99, dir: "N" }, { marker: 3, dir: "Q" }, { marker: 2, dir: "here", path: [2, 13] }] });
+  assert.equal(svg, "", "없는 마커·모르는 방향·이어지지 않는 길은 안 그림");
+  assert.equal(guideLayer(null), "");
 
-  // 화면에 넘길 값: 화재 위치와 대피 화살표는 대피 모드 메시지에 붙은 것만. 불꽃 감지 경보로는 그리지 않는다
+  // 화면에 넘길 값: 대피 모드일 때 받은 evac만. 불꽃 감지 경보로는 그리지 않는다
   const st = createStore();
-  apply(st, { kind: "event", id: 1, robot: "A", type: "flame", marker: 5, segment: [5, 6], zones: ["A1"], checked: false });
-  assert.deepEqual(firePlaces(st), []);
-  apply(st, { kind: "mode", mode: "evacuate", fire: { segment: [5, 6], zones: ["A1"] }, guides: PLACE_SAMPLE.guides });
-  assert.deepEqual(firePlaces(st), [{ segment: [5, 6], zones: ["A1"] }]);
-  assert.equal(st.guides.length, 3);
-  apply(st, { kind: "mode", mode: "normal", fire: { segment: [5, 6] }, guides: PLACE_SAMPLE.guides });
-  assert.deepEqual(firePlaces(st), []);
-  assert.deepEqual(st.guides, []);
+  apply(st, { kind: "event", id: 1, robot: "A", type: "flame", marker: 5, checked: false });
+  assert.equal(evacView(st), null);
   apply(st, { kind: "mode", mode: "evacuate" });
-  assert.deepEqual(firePlaces(st), [], "fire가 없으면 그리지 않음");
-  assert.deepEqual(st.guides, [], "guides가 없으면 빈 목록");
+  assert.equal(evacView(st), null, "evac이 오기 전");
+  apply(st, { kind: "evac", fire: 7, exits: EXITS, arrows: plan7 });
+  assert.deepEqual(evacView(st), { fire: 7, exits: EXITS, arrows: plan7 });
+  apply(st, { kind: "mode", mode: "normal" });
+  assert.equal(evacView(st), null);
+  assert.equal(st.evac, null, "평상시로 돌아가면 지움");
+  apply(st, { kind: "mode", mode: "evacuate" });
+  apply(st, { kind: "evac", fire: null, exits: "?", arrows: null });
+  assert.deepEqual(evacView(st), { fire: null, exits: [], arrows: [] }, "이상한 값은 빈 값으로");
 }
 
 // ---------- 5) 화면 파일이 오류 없이 돌아가는지 ----------
@@ -363,18 +401,24 @@ async function bootApp(search, tag) {
   globalThis.fake.tick();
   assert.equal(el("robot-list").innerHTML, "");
   assert.equal(el("map .robots").innerHTML, ""); // 기본 화면에는 로봇 위치 없음
-  // 화재 위치·대피 화살표: 서버가 값을 안 보내면(지금 진짜 서버) 빈 층, 예시 값을 보내면 기본 화면에도 그린다
-  assert.equal(el("map .fire").innerHTML, "");
-  assert.equal(el("map .guides").innerHTML, "");
-  const placed = globalThis.fake.fire("B", true);
+  // 화재 위치·대피 안내: 서버가 대피로 바꾸면 evac도 오고, 기본 화면에도 그린다
+  assert.match(el("map .fire").innerHTML, /화재/);
+  assert.equal((el("map .guides").innerHTML.match(/class="guide-exit"/g) || []).length, 2);
+  const placed = globalThis.fake.fire("B", 7);
   await new Promise((r) => setTimeout(r, 0));
-  assert.match(el("map .fire").innerHTML, /화재 의심/);
-  assert.equal((el("map .guides").innerHTML.match(/class="guide-arrow"/g) || []).length, 3);
+  assert.match(el("map .fire").innerHTML, /cx="1220" cy="553"/);
+  assert.equal((el("map .guides").innerHTML.match(/class="guide-arrow"/g) || []).length, 12);
   await globalThis.fake.fetch(`/events/${placed.id}/check`, { method: "POST" });
   await globalThis.fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(el("map .fire").innerHTML, "");
   assert.equal(el("map .guides").innerHTML, "");
+  // 관리자가 직접 대피로 바꾸면 불난 마커는 모름: 대피 안내만
+  await globalThis.fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "evacuate" }) });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(el("map .fire").innerHTML, "");
+  assert.equal((el("map .guides").innerHTML.match(/class="guide-arrow"/g) || []).length, 13);
+  await globalThis.fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
   globalThis.fake.fire("A"); // 아래 지도 확인은 대피 중 그대로
   // 지도: 마커 15개, 구역 5개, 경보·로봇 표시는 없음
   const svg = el("map").innerHTML;

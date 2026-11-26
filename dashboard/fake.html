@@ -28,7 +28,7 @@
 <div class="row">
   <span>현재: <b id="mode">-</b></span>
   <button data-act="fire">화재 확정 + 대피</button>
-  <button data-act="fire-place">화재 확정 + 대피 (위치·화살표 예시)</button>
+  <label>불난 마커 <select id="fire-marker"><option value="">로봇 위치</option></select></label>
   <button data-act="normal">대피 해제</button>
 </div>
 
@@ -113,13 +113,16 @@ document.body.addEventListener("click", async (ev) => {
   const b = ev.target.closest("button");
   if (!b) return;
   const act = b.dataset.act;
-  if (act === "fire") fake.fire();
-  if (act === "fire-place") fake.fire(undefined, true);
+  if (act === "fire") {
+    const m = document.getElementById("fire-marker").value;
+    fake.fire(undefined, m ? Number(m) : undefined);
+  }
   if (act === "normal") await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
   if (b.dataset.emit) fake.emit(b.dataset.emit);
   if (b.dataset.check) await fake.fetch(`/events/${b.dataset.check}/check`, { method: "POST" });
 });
 
+for (let m = 1; m <= 15; m++) document.getElementById("fire-marker").insertAdjacentHTML("beforeend", `<option>${m}</option>`);
 connect();
 </script>
 </body>

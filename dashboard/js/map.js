@@ -130,11 +130,11 @@ export function robotLayer(robots) {
   return s;
 }
 
-// ---------- 화재 위치와 대피 화살표 (서버와 정하는 중인 제안 모양, README "서버와 주고받기") ----------
+// ---------- 화재 위치와 대피 안내 (서버 evac 메시지, server/dispatch.py) ----------
 
 const FIRE = "#ff4d4d";
 // 비상구 문 자리 (벽 안쪽 x, 문이 뚫린 y 범위)
-const EXIT_DOOR = { 1: { x: 258, y1: 500, y2: 620 }, 2: { x: 1738, y1: 500, y2: 620 } };
+const EXIT_DOORS = [{ x: 258, y1: 500, y2: 620 }, { x: 1738, y1: 500, y2: 620 }];
 const DIR_ANGLE = { E: 0, S: 90, W: 180, N: -90 };
 
 // 두 점이 같은 순찰 통로(SEGMENTS) 위에 있는지
@@ -174,56 +174,67 @@ function points(list) {
   return list.map(([x, y]) => `${x},${y}`).join(" ");
 }
 
-// 화재 층. fires: [{ segment: [마커, 마커] | null, zones: ["A1", …] }]
-// 통로 구간은 빨간 굵은 선, 양옆 구역은 빨간 칸과 "화재 의심"
-export function fireLayer(fires) {
-  let s = "";
-  for (const f of fires) {
-    for (const z of f.zones ?? []) {
-      const r = ZONES[z];
-      if (!r) continue;
-      s += `<rect class="fire-zone" x="${r.x}" y="${r.y}" width="${r.w}" height="${r.h}" rx="4" fill="${FIRE}" fill-opacity="0.22" stroke="${FIRE}" stroke-width="6"/>`;
-      // 구역 이름(가운데)과 겹치지 않게 위쪽에
-      s += `<text x="${r.x + r.w / 2}" y="${r.y + 38}" font-size="28" font-weight="700" text-anchor="middle" fill="#ffc2c2">화재 의심</text>`;
-    }
-    const pts = Array.isArray(f.segment) && f.segment.length === 2 ? corridorPoints(f.segment[0], f.segment[1]) : null;
-    if (pts) {
-      s += `<polyline class="fire-segment" points="${points(pts)}" fill="none" stroke="${FIRE}" stroke-opacity="0.45" stroke-width="34" stroke-linejoin="round" stroke-linecap="round"/>`;
-      s += `<polyline points="${points(pts)}" fill="none" stroke="${FIRE}" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/>`;
-    }
-  }
-  return s;
+// 화재 층. fire: 서버가 확정한 불난 마커 (모르면 null). 마커 둘레를 빨갛게, 위에 "화재"
+export function fireLayer(fire) {
+  const p = MARKER_POS[fire];
+  if (!p) return "";
+  const [x, y] = p;
+  return `<circle class="fire-marker" cx="${x}" cy="${y}" r="64" fill="${FIRE}" fill-opacity="0.3" stroke="${FIRE}" stroke-width="8"/>` +
+    `<text x="${x}" y="${y - 78}" font-size="32" font-weight="700" text-anchor="middle" fill="#ffc2c2">화재</text>`;
 }
 
-// 대피 층. guides: [{ marker, dir: N·E·S·W, exit: 1·2, path: [마커, …] }]
-// 갈림길 마커 옆에 비상구 쪽 화살표. path가 있으면 그 마커들을 지나 비상구 문까지 점선
-export function guideLayer(guides) {
+// 출구 마커 옆에 비상구 문이 있으면 그 문 (마커 높이가 문 범위 안이고 가까운 쪽)
+function doorFor(marker) {
+  const p = MARKER_POS[marker];
+  if (!p) return null;
+  const near = EXIT_DOORS.filter((d) => p[1] >= d.y1 && p[1] <= d.y2);
+  near.sort((a, b) => Math.abs(a.x - p[0]) - Math.abs(b.x - p[0]));
+  return near[0] ?? null;
+}
+
+// 대피 층. evac: { fire, exits: [마커], arrows: [{ marker, dir: N·E·S·W·here·x, exit, path }] }
+//   - 대피 길: 모든 arrows의 path를 합친 통로를 초록 점선으로 (같은 통로는 한 번만)
+//   - 출구: 초록 테두리와 "출구". 옆에 비상구 문이 있으면 문까지 잇는다
+//   - 화살표: 마커마다 출구 쪽 첫 걸음 방향. here(출구)는 화살표 없음
+//   - x: 갈 수 없는 마커 (불난 마커는 화재 층이 따로 그린다)
+export function guideLayer(evac) {
+  if (!evac) return "";
+  const arrows = Array.isArray(evac.arrows) ? evac.arrows : [];
+  const exits = Array.isArray(evac.exits) ? evac.exits : [];
   let s = "";
-  for (const g of guides) {
+  const drawn = new Set();
+  for (const g of arrows) {
     const path = Array.isArray(g.path) ? g.path : [];
-    const pts = [];
     for (let i = 0; i + 1 < path.length; i++) {
+      const key = [path[i], path[i + 1]].sort((a, b) => a - b).join("-");
+      if (drawn.has(key)) continue;
+      drawn.add(key);
       const seg = corridorPoints(path[i], path[i + 1]);
-      if (!seg) { pts.length = 0; break; } // 이어지지 않는 길은 그리지 않는다
-      pts.push(...(i === 0 ? seg : seg.slice(1)));
-    }
-    const door = EXIT_DOOR[g.exit];
-    // 길의 끝 (마커 하나뿐인 path면 그 마커). 비상구 문과 높이가 맞으면 문까지 잇는다
-    const last = pts.length ? pts.at(-1) : path.length === 1 ? MARKER_POS[path[0]] : null;
-    if (door && last && last[1] >= door.y1 && last[1] <= door.y2) {
-      if (!pts.length) pts.push(last);
-      pts.push([door.x, last[1]]);
-    }
-    if (pts.length >= 2) {
-      s += `<polyline class="guide-path" points="${points(pts)}" fill="none" stroke="${C.green}" stroke-width="10" stroke-dasharray="26 16" stroke-linejoin="round"/>`;
+      if (!seg) continue; // 지도 통로로 이어지지 않으면 그리지 않는다
+      s += `<polyline class="guide-path" points="${points(seg)}" fill="none" stroke="${C.green}" stroke-width="10" stroke-dasharray="26 16" stroke-linejoin="round"/>`;
     }
   }
-  // 화살표는 길 위에 그린다
-  for (const g of guides) {
+  for (const e of exits) {
+    const p = MARKER_POS[e];
+    if (!p) continue;
+    const door = doorFor(e);
+    if (door) {
+      s += `<polyline class="guide-path" points="${points([p, [door.x, p[1]]])}" fill="none" stroke="${C.green}" stroke-width="10" stroke-dasharray="26 16"/>`;
+    }
+    s += `<rect class="guide-exit" x="${p[0] - 40}" y="${p[1] - 40}" width="80" height="80" rx="14" fill="none" stroke="${C.green}" stroke-width="8"/>`;
+    s += `<text x="${p[0]}" y="${p[1] + 74}" font-size="30" font-weight="700" text-anchor="middle" fill="${C.green}">출구</text>`;
+  }
+  for (const g of arrows) {
     const p = MARKER_POS[g.marker];
-    if (!p || !(g.dir in DIR_ANGLE)) continue;
-    s += `<g class="guide-arrow" transform="translate(${p[0]},${p[1]}) rotate(${DIR_ANGLE[g.dir]})">` +
-      `<polygon points="34,-10 100,-10 100,-26 142,0 100,26 100,10 34,10" fill="${C.green}" stroke="#062b16" stroke-width="4" stroke-linejoin="round"/></g>`;
+    if (!p) continue;
+    if (g.dir in DIR_ANGLE) {
+      s += `<g class="guide-arrow" transform="translate(${p[0]},${p[1]}) rotate(${DIR_ANGLE[g.dir]})">` +
+        `<polygon points="30,-9 76,-9 76,-24 112,0 76,24 76,9 30,9" fill="${C.green}" stroke="#062b16" stroke-width="4" stroke-linejoin="round"/></g>`;
+    } else if (g.dir === "x" && g.marker !== evac.fire) {
+      const [x, y] = [p[0] + 44, p[1] - 44];
+      s += `<g class="guide-blocked" stroke="${C.off}" stroke-width="7" stroke-linecap="round">` +
+        `<line x1="${x - 14}" y1="${y - 14}" x2="${x + 14}" y2="${y + 14}"/><line x1="${x + 14}" y1="${y - 14}" x2="${x - 14}" y2="${y + 14}"/></g>`;
+    }
   }
   return s;
 }
@@ -244,8 +255,9 @@ export function legendHtml({ robots = false } = {}) {
     swatch(`<rect x="3" y="2" width="24" height="14" fill="#0f3a24" stroke="${C.green}" stroke-width="2"/>`) + "비상구",
     swatch(`<rect x="3" y="2" width="24" height="14" fill="none" stroke="${C.wall}" stroke-width="2" stroke-dasharray="4 3"/>`) + "충전 스테이션",
   ];
-  items.push(swatch(`<line x1="2" y1="9" x2="28" y2="9" stroke="${FIRE}" stroke-width="5" stroke-linecap="round"/>`) + "화재 위치");
+  items.push(swatch(`<circle cx="15" cy="9" r="7" fill="${FIRE}" fill-opacity="0.3" stroke="${FIRE}" stroke-width="2"/>`) + "화재 위치");
   items.push(swatch(`<polygon points="3,6 18,6 18,2 28,9 18,16 18,12 3,12" fill="${C.green}"/>`) + "대피 방향");
+  items.push(swatch(`<rect x="8" y="2" width="14" height="14" rx="3" fill="none" stroke="${C.green}" stroke-width="2"/>`) + "대피 출구");
   if (robots) {
     items.push(swatch(`<circle cx="15" cy="9" r="7" fill="#062033" stroke="${C.cyan}" stroke-width="2"/>`) + "로봇 위치 (지난 마커)");
     items.push(swatch(`<circle cx="15" cy="9" r="7" fill="#062033" stroke="${C.off}" stroke-width="2" stroke-dasharray="3 2"/>`) + "끊긴 로봇 (마지막 위치)");
