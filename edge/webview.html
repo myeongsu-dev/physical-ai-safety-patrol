@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Edge 디버그</title>
+<style>
+  :root { --bg:#0f1115; --card:#181b22; --line:#2a2f3a; --fg:#e6e8ec; --dim:#8a93a3;
+          --ok:#3fb950; --warn:#d29922; --bad:#f85149; --acc:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, "Noto Sans KR", sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; }
+  .pill { padding:2px 10px; border-radius:999px; background:var(--line); font-weight:600; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); } .dim { color:var(--dim); }
+  main { display:grid; grid-template-columns:minmax(0,1.4fr) minmax(0,1fr); gap:12px; padding:12px 16px; }
+  @media (max-width:900px) { main { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; min-width:0; }
+  .card h2 { font-size:13px; margin:0 0 8px; color:var(--dim); text-transform:uppercase; letter-spacing:.04em; display:flex; justify-content:space-between; gap:8px; }
+  .cam { position:relative; background:#000; border-radius:6px; overflow:hidden; aspect-ratio:4/3; }
+  .cam img, .cam canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  .cam .msg { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--dim); }
+  .tools { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; align-items:center; }
+  button, label.chk { background:var(--line); color:var(--fg); border:0; border-radius:6px; padding:5px 10px; font:inherit; cursor:pointer; }
+  a { color:var(--acc); }
+  table { width:100%; border-collapse:collapse; }
+  td { padding:3px 4px; border-bottom:1px solid var(--line); vertical-align:top; word-break:break-word; }
+  td:first-child { color:var(--dim); width:42%; }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:3px; }
+  .bar > i { display:block; height:100%; background:var(--acc); }
+  #log { height:260px; overflow:auto; font:12px/1.4 ui-monospace, Consolas, monospace; background:#0b0d11; border-radius:6px; padding:6px 8px; white-space:pre-wrap; }
+  #log .WARNING { color:var(--warn); } #log .ERROR, #log .CRITICAL { color:var(--bad); }
+  .wide { grid-column:1 / -1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>로봇 <span id="robot">-</span></h1>
+  <span class="pill" id="status">-</span>
+  <span id="hold" class="warn"></span>
+  <span class="dim" id="ver"></span>
+  <span class="dim" style="margin-left:auto" id="clock">연결 중…</span>
+</header>
+<main>
+  <section class="card">
+    <h2><span>머리 카메라</span><span id="camInfo"></span></h2>
+    <div class="cam">
+      <div class="msg" id="camMsg">영상 기다리는 중…</div>
+      <img id="stream" alt="">
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="tools">
+      <label class="chk"><input type="checkbox" id="boxes" checked> 인식 상자</label>
+      <button id="pause">영상 멈춤</button>
+      <a href="/snapshot.jpg" target="_blank">한 장 저장</a>
+      <span class="dim" id="detInfo"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>판단</h2>
+    <table id="tAgent"></table>
+    <h2 style="margin-top:12px">인식 결과</h2>
+    <table id="tDets"></table>
+  </section>
+
+  <div class="grid2 wide">
+    <section class="card"><h2>보드 (MechDog)</h2><table id="tBoard"></table></section>
+    <section class="card"><h2>카메라 · 모델 · 서버</h2><table id="tDev"></table></section>
+    <section class="card"><h2>라즈베리 파이</h2><table id="tPi"></table></section>
+  </div>
+
+  <section class="card wide">
+    <h2><span>기록</span><label class="dim"><input type="checkbox" id="follow" checked> 맨 아래 따라가기</label></h2>
+    <div id="log"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const v = (x, unit = "") => x === null || x === undefined ? '<span class="dim">-</span>' : esc(x) + unit;
+const yes = (b, good = "예", bad = "아니오") => b === null || b === undefined ? v(null) : b ? `<span class="ok">${good}</span>` : `<span class="bad">${bad}</span>`;
+const lvl = (x, warn, bad, unit = "") => x == null ? v(null) : `<span class="${x >= bad ? "bad" : x >= warn ? "warn" : "ok"}">${esc(x)}${unit}</span>`;
+const bar = p => p == null ? "" : `<div class="bar"><i style="width:${Math.min(100, p)}%"></i></div>`;
+const rows = (el, list) => { $(el).innerHTML = list.map(([k, h]) => `<tr><td>${k}</td><td>${h}</td></tr>`).join(""); };
+const dur = s => s == null ? null : `${Math.floor(s / 86400)}일 ${Math.floor(s % 86400 / 3600)}시간 ${Math.floor(s % 3600 / 60)}분`;
+const COLORS = { fire: "#f85149", head: "#d29922", helmet: "#3fb950", person: "#58a6ff" };
+
+// ---------- 카메라 ----------
+const img = $("stream"), cv = $("overlay");
+let paused = false, last = null;
+function startStream() { img.src = "/stream.mjpg?t=" + Date.now(); }
+img.onload = () => { $("camMsg").style.display = "none"; };
+img.onerror = () => { $("camMsg").style.display = ""; $("camMsg").textContent = "영상 끊김 — 다시 연결 중…"; if (!paused) setTimeout(startStream, 2000); };
+$("pause").onclick = () => {
+  paused = !paused;
+  if (paused) { img.src = "/snapshot.jpg?t=" + Date.now(); $("pause").textContent = "영상 다시"; }
+  else { startStream(); $("pause").textContent = "영상 멈춤"; }
+};
+startStream();
+
+function drawBoxes() {
+  const r = cv.getBoundingClientRect();
+  cv.width = r.width * devicePixelRatio; cv.height = r.height * devicePixelRatio;
+  const g = cv.getContext("2d");
+  g.clearRect(0, 0, cv.width, cv.height);
+  const m = last && last.model;
+  if (!$("boxes").checked || !m || !m.dets || !m.dets.length || !m.size) return;
+  if (m.dets_age_s != null && m.dets_age_s > 2) return;   // 오래된 결과는 안 그림
+  const [w, h] = m.size, s = Math.min(cv.width / w, cv.height / h);
+  const ox = (cv.width - w * s) / 2, oy = (cv.height - h * s) / 2;
+  g.lineWidth = 2 * devicePixelRatio; g.font = `${12 * devicePixelRatio}px sans-serif`;
+  for (const d of m.dets) {
+    const [x1, y1, x2, y2] = d.box, c = COLORS[d.cls] || "#fff";
+    g.strokeStyle = c; g.fillStyle = c;
+    g.strokeRect(ox + x1 * s, oy + y1 * s, (x2 - x1) * s, (y2 - y1) * s);
+    g.fillText(`${d.cls} ${d.conf.toFixed(2)}`, ox + x1 * s + 3, oy + y1 * s - 4 * devicePixelRatio);
+  }
+}
+$("boxes").onchange = drawBoxes;
+addEventListener("resize", drawBoxes);
+
+// ---------- 상태 ----------
+function render(s) {
+  last = s;
+  const a = s.agent, b = s.board, c = s.camera, m = s.model, q = s.mqtt, p = s.pi;
+  $("robot").textContent = s.robot;
+  $("status").textContent = a.state.status + (a.status !== a.state.status ? ` (${a.status}, 보드 ok 대기)` : "");
+  $("hold").textContent = a.hold ? `멈춤 이유: ${a.hold}` : "";
+  $("ver").textContent = "버전 " + s.version;
+  $("clock").textContent = "Pi 시각 " + s.time;
+  $("camInfo").innerHTML = `${v(c.fps)} 장/초 · ${c.frame_age_s == null ? '<span class="bad">영상 없음</span>' : c.frame_age_s > 1 ? `<span class="warn">${c.frame_age_s}s 전</span>` : '<span class="ok">실시간</span>'}`;
+  $("detInfo").textContent = m.ready ? `추론 ${m.ms ?? "-"} ms (${m.imgsz}px)` : "모델 없음 — 영상만";
+
+  rows("tAgent", [
+    ["상태 / 서버에 알린 값", `${v(a.status)} / ${v(a.state.status)}`],
+    ["모드", v(a.mode)], ["순찰 역할", v(a.state.role)], ["마커(구역)", v(a.state.marker)],
+    ["목표", v(a.target)], ["끝나면 돌아갈 상태", v(a.resume_to)],
+    ["보드 F ok", yes(a.acked)], ["멈춤 이유(hold)", a.hold ? `<span class="warn">${esc(a.hold)}</span>` : v(null)],
+    ["표면 온도", lvl(s.temp_c, 40, 45, " ℃")],
+    ["막힘", a.blocked ? esc(JSON.stringify(a.blocked)) : v(null)],
+    ["과열 확인", a.heat ? esc(JSON.stringify(a.heat)) : v(null)],
+    ["안전모 투표(최근 5장)", a.helmet_votes.length ? a.helmet_votes.map(x => x ? "🟥" : "⬜").join("") : v(null)],
+  ]);
+  rows("tDets", m.dets.length
+    ? m.dets.map(d => [`<b style="color:${COLORS[d.cls] || "#fff"}">${esc(d.cls)}</b>`, `${d.conf.toFixed(2)} · [${d.box.map(n => Math.round(n)).join(", ")}]`])
+    : [["", `<span class="dim">${m.ready ? "없음" + (m.dets_age_s != null ? ` (${m.dets_age_s}s 전)` : "") : "모델 없음"}</span>`]]);
+
+  rows("tBoard", [
+    ["포트", v(b.port) + (b.fake ? ' <span class="warn">(가짜)</span>' : "")],
+    ["연결", yes(b.connected, "연결됨", "끊김")],
+    ["측정값(D) 나이", b.d_age_s == null ? '<span class="bad">아직 없음</span>' : lvl(b.d_age_s, 0.5, 1.0, " s")],
+    ["배터리", b.battery == null ? v(null) : `<span class="${b.battery < 15 ? "bad" : b.battery < 40 ? "warn" : "ok"}">${b.battery} %</span>` + bar(b.battery)],
+    ["초음파", v(b.sonar_cm, " cm")],
+    ["선 x (0~159, -1 없음)", b.line == null ? v(null) : b.line < 0 ? '<span class="bad">-1 (못 찾음)</span>' : `${b.line} ${bar(b.line / 159 * 100)}`],
+    ["측정값 전체", esc(JSON.stringify(b.values))],
+    ["보드 버전", v(b.version)], ["지원 명령", v(b.commands && b.commands.join(" "))],
+    ["다시 연 횟수 / 감시 끊김", `${v(b.opens)} / ${v(b.quiet_breaks)}`],
+    ["마지막 오류", b.last_error ? `<span class="warn">${esc(b.last_error.join(" | "))}</span>` : v(null)],
+  ]);
+  rows("tDev", [
+    ["카메라 포트", v(c.port) + (c.fake ? ' <span class="warn">(가짜)</span>' : "")],
+    ["받은 장 수", v(c.frames)], ["초당 장 수", v(c.fps)],
+    ["마지막 장", c.frame_age_s == null ? '<span class="bad">없음</span>' : lvl(c.frame_age_s, 0.5, 1.0, " s 전")],
+    ["모델", m.ready ? `<span class="ok">${esc(m.version)}</span>` : '<span class="warn">없음</span>'],
+    ["모델 경로", v(m.path)], ["추론 시간", lvl(m.ms, 300, 800, " ms")],
+    ["MQTT", `${v(q.host)} ${yes(q.connected, "연결됨", "끊김")}`],
+    ["못 보낸 이벤트", lvl(q.outbox, 1, 10, " 개")],
+  ]);
+  const t = p.throttled;
+  rows("tPi", [
+    ["이름 / IP", `${v(p.host)} / ${v(p.ips && p.ips.join(", "))}`],
+    ["CPU 온도", lvl(p.cpu_temp_c, 70, 80, " ℃")],
+    ["CPU 사용", p.cpu_pct == null ? v(null) : lvl(p.cpu_pct, 70, 90, " %") + bar(p.cpu_pct)],
+    ["부하 (1·5·15분)", v(p.load && p.load.join(" · "))],
+    ["메모리", p.mem ? `${p.mem.used_mb} / ${p.mem.total_mb} MB ${bar(p.mem.pct)}` : v(null)],
+    ["디스크 남음", p.disk ? `${p.disk.free_gb} / ${p.disk.total_gb} GB ${bar(p.disk.pct)}` : v(null)],
+    ["전원·과열 제한", !t ? v(null) : `${t.undervolt_now ? '<span class="bad">저전압!</span> ' : ""}${t.throttled_now ? '<span class="bad">속도 제한 중</span> ' : ""}${!t.undervolt_now && !t.throttled_now ? '<span class="ok">정상</span> ' : ""}${t.undervolt_seen || t.throttled_seen ? `<span class="warn">(켠 뒤 ${t.undervolt_seen ? "저전압" : ""}${t.throttled_seen ? " 제한" : ""} 있었음)</span>` : ""} <span class="dim">${t.raw}</span>`],
+    ["켜진 시간", v(dur(p.uptime_s))],
+  ]);
+  drawBoxes();
+}
+
+async function poll() {
+  try {
+    const r = await fetch("/api/status", { cache: "no-store" });
+    render(await r.json());
+  } catch (e) {
+    $("clock").innerHTML = '<span class="bad">Pi 연결 끊김</span>';
+  }
+  setTimeout(poll, 1000);
+}
+
+let logAfter = 0;
+async function pollLog() {
+  try {
+    const r = await fetch("/api/log?after=" + logAfter, { cache: "no-store" });
+    const lines = await r.json(), box = $("log");
+    for (const l of lines) {
+      const d = document.createElement("div");
+      d.className = l.level; d.textContent = l.msg; box.appendChild(d);
+      logAfter = l.n;
+    }
+    while (box.childElementCount > 1000) box.firstChild.remove();
+    if (lines.length && $("follow").checked) box.scrollTop = box.scrollHeight;
+  } catch (e) {}
+  setTimeout(pollLog, 1500);
+}
+poll(); pollLog();
+</script>
+</body>
+</html>
