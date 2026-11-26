@@ -26,7 +26,8 @@ heat 이벤트는 events.HeatCheck로 교차 확인해 출동·대피 명령을 
 마커와 보는 방향을 아는 로봇에는 guide(arrow)를 보낸다. normal로 돌아가면 대피 안내도 끝 (mode 메시지로 앎).
 
 출발은 서버 자동 (normal 모드일 때 1초마다): 빈 역할이 있으면 도크에서 쉬는 로봇 중 배터리가 가장 많은 로봇에 patrol.
-관리자가 stop을 보낸 로봇은 patrol · resume을 직접 보내기 전까지 자동 출발에서 뺀다.
+Pi가 state에 hold(정지 이유: stop · line · board · no_ack ...)를 보내면 자동 출발에서 뺀다.
+hold는 Pi가 patrol · resume을 받아야 풀리니, 사람이 POST /robots/…로 직접 보내야 다시 나간다.
 
 state 메시지의 online이 false면 연결 끊김 (ONLINE_SEC초 넘게 state 없음). 끊길 때 한 번, 다시 붙을 때 다시 보낸다.
 | / | dashboard/ 폴더 (index.html이 생기면) |
@@ -93,7 +94,6 @@ class Server:
                  clock=time.time, admin_password=None, auto_start=True):
         self.clock = clock
         self.auto_start = auto_start
-        self.held = set()   # 관리자가 stop을 보낸 로봇 (자동 출발 안 함)
         self.evac = None    # 대피 중이면 대시보드로 보낸 대피 안내
         self.admin_password = admin_password or None   # 없으면 잠그지 않음
         self.fleet = Fleet(clock=clock)
@@ -174,7 +174,7 @@ class Server:
         with self.lock:
             self.apply(self.heat.tick())
             if self.auto_start and self.mode == "normal":
-                sent = self.send_all(self.fleet.auto_assign(auto=True, exclude=self.heat.busy() | self.held))
+                sent = self.send_all(self.fleet.auto_assign(auto=True, exclude=self.heat.busy()))
                 for s in sent:
                     log.info("자동 출발 %s 역할 %s", s["topic"].split("/")[1], s["msg"]["role"])
 
@@ -318,7 +318,6 @@ def create_app(server):
                 sent = server.send_all(server.fleet.assign(robot, role))
         except ValueError as e:
             raise HTTPException(409, str(e))
-        server.held.discard(robot)
         return {"sent": sent}
 
     @app.post("/robots/{robot}/cmd", dependencies=lock)
@@ -327,10 +326,6 @@ def create_app(server):
             msg = protocol.command(body.pop("cmd", ""), **body)
         except (ValueError, TypeError) as e:
             raise HTTPException(400, str(e))
-        if msg["cmd"] == "stop":
-            server.held.add(robot)
-        elif msg["cmd"] in ("patrol", "resume"):
-            server.held.discard(robot)
         return {"sent": server.send_all([(protocol.topic(robot, "cmd"), msg)])}
 
     @app.post("/mode", dependencies=lock)
@@ -362,8 +357,8 @@ def selfcheck():
         srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0], auto_start=False)
         with TestClient(create_app(srv)) as c:
             # 로봇 두 대가 state를 보내면 대시보드 WebSocket에 붙자마자 보인다
-            srv.on_mqtt("potent/A/state", protocol.pack({"marker": 15, "status": "idle", "battery": 90}))
-            srv.on_mqtt("potent/B/state", protocol.pack({"marker": 15, "status": "idle", "battery": 70}))
+            srv.on_mqtt("potent/A/state", protocol.pack({"marker": 15, "status": "idle", "battery": 90, "hold": None}))
+            srv.on_mqtt("potent/B/state", protocol.pack({"marker": 15, "status": "idle", "battery": 70, "hold": None}))
             srv.on_mqtt("potent/B/state", b"not json")                  # 깨진 건 버림
             with c.websocket_connect("/ws") as ws:
                 first = [ws.receive_json() for _ in range(3)]
@@ -440,10 +435,9 @@ def selfcheck():
         now[0] += 100
         srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0])
         with TestClient(create_app(srv)) as c:
-            srv.on_mqtt("potent/A/state", protocol.pack({"marker": 15, "status": "idle", "battery": 70}))
-            srv.on_mqtt("potent/B/state", protocol.pack({"marker": 15, "status": "idle", "battery": 90}))
-            srv.on_mqtt("potent/C/state", protocol.pack({"marker": 15, "status": "idle", "battery": 99}))
-            c.post("/robots/C/cmd", json={"cmd": "stop"})
+            srv.on_mqtt("potent/A/state", protocol.pack({"marker": 15, "status": "idle", "battery": 70, "hold": None}))
+            srv.on_mqtt("potent/B/state", protocol.pack({"marker": 15, "status": "idle", "battery": 90, "hold": None}))
+            srv.on_mqtt("potent/C/state", protocol.pack({"marker": 15, "status": "idle", "battery": 99, "hold": "stop"}))
             srv.sent.clear()
             srv.tick()
             assert srv.sent == [("potent/B/cmd", {"cmd": "patrol", "role": "A"}),
@@ -453,12 +447,13 @@ def selfcheck():
             srv.sent.clear()
             c.post("/mode", json={"mode": "evacuate"})
             now[0] += 60
-            for n, b in (("A", 70), ("B", 90), ("C", 99)):
-                srv.on_mqtt(f"potent/{n}/state", protocol.pack({"marker": 15, "status": "idle", "battery": b}))
+            for n, b, h in (("A", 70, None), ("B", 90, None), ("C", 99, "stop")):
+                srv.on_mqtt(f"potent/{n}/state", protocol.pack({"marker": 15, "status": "idle", "battery": b, "hold": h}))
             srv.tick()
             assert not [m for _, m in srv.sent if m.get("cmd") == "patrol"]   # 대피 중엔 출발 안 함
             c.post("/mode", json={"mode": "normal"})
-            c.post("/robots/C/cmd", json={"cmd": "resume"})              # 관리자가 풀면 다시 대상
+            # 관리자가 resume을 보내 Pi가 hold를 풀면 다시 대상 (여기선 Pi 대신 state로)
+            srv.on_mqtt("potent/C/state", protocol.pack({"marker": 15, "status": "idle", "battery": 99, "hold": None}))
             srv.sent.clear()
             srv.tick()
             assert srv.sent[0] == ("potent/C/cmd", {"cmd": "patrol", "role": "A"}), srv.sent

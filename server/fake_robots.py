@@ -2,7 +2,8 @@
 로봇 없이 서버·대시보드를 개발할 때 쓴다. 실행: python -m server.fake_robots
 셀프 체크(브로커 없이): python -m server.fake_robots --selfcheck
 
-- 1초마다 potent/{로봇}/state (marker, status, role, battery, sonar_cm, temp_c, version)
+- 1초마다 potent/{로봇}/state (marker, status, role, battery, sonar_cm, temp_c, hold, version)
+  hold: 다시 걷지 않는 이유 (Pi와 같게 stop · wait · guide, patrol · resume으로 풀림), 없으면 null
 - 가끔 obstacle · helmet · heat 이벤트 (사진은 없음, photo는 null)
 - potent/{로봇}/cmd 에 반응: patrol(role) · stop · resume · go(zone) · wait · dock · guide(arrow)
 - potent/mode 에 반응: evacuate면 순찰을 멈추고 guide 대기, normal이면 idle
@@ -42,12 +43,13 @@ class FakeRobot:
         self.mode = "normal"
         self.sonar_cm = 120.0
         self.temp_c = 24.0
+        self.hold = None        # 다시 걷지 않는 이유 (Pi edge/agent.py의 hold와 같은 뜻)
 
     # ---------- 보낼 것 ----------
     def state(self):
         return {"marker": self.marker, "status": self.status, "role": self.role,
                 "battery": round(self.battery), "sonar_cm": round(self.sonar_cm, 1),
-                "temp_c": round(self.temp_c, 1), "version": "fake"}
+                "temp_c": round(self.temp_c, 1), "hold": self.hold, "version": "fake"}
 
     def _event(self, type, **fields):
         return protocol.event(type, marker=self.marker, photo=None, **fields)
@@ -70,14 +72,15 @@ class FakeRobot:
                 start = route["entry"] if self.marker == map_config.DOCK_MARKER else []
                 self.path = [m for m in start if m != self.marker]
                 self.lap = []
-            self.status, self.target = "patrol", None
+            self.status, self.target, self.hold = "patrol", None, None
         elif cmd == "stop":
+            self.hold = "stop"
             if self.status in MOVING:
                 self.resume_to = self.status
             self.status = "idle"
         elif cmd == "resume":
             self.status = self.resume_to or "patrol"
-            self.resume_to = None
+            self.resume_to, self.hold = None, None
         elif cmd in ("go", "dock"):
             self.target = map_config.DOCK_MARKER if cmd == "dock" else msg.get("zone")
             if self.target not in map_config.MARKERS:
@@ -86,9 +89,9 @@ class FakeRobot:
             self.path = [self.target]       # 지도 경로 계산은 dispatch에서. 여기선 바로 그 마커로
             self.status = cmd
         elif cmd == "wait":
-            self.status = "idle"
+            self.status, self.hold = "idle", "wait"
         elif cmd == "guide":
-            self.status = "guide"
+            self.status, self.hold = "guide", "guide"
         self.next_marker = max(self.next_marker, now + MARKER_SEC)
 
     def on_mode(self, msg):
@@ -218,8 +221,8 @@ def selfcheck():
     assert seen[MARKER_SEC] == route["entry"][1], seen[:10]      # 도크 → 14 → 고리
     assert set(route["loop"]) <= set(seen) and 9 not in seen      # A 고리만 돈다
     assert b.state()["role"] == "A" and b.battery < 50
-    b.on_cmd({"cmd": "stop"}); assert b.status == "idle"
-    b.on_cmd({"cmd": "resume"}); assert b.status == "patrol"
+    b.on_cmd({"cmd": "stop"}); assert b.status == "idle" and b.state()["hold"] == "stop"
+    b.on_cmd({"cmd": "resume"}); assert b.status == "patrol" and b.state()["hold"] is None
     b.on_cmd(protocol.command("dock"))
     for _ in range(10):
         now[0] += 1; b.tick(chance=0)
