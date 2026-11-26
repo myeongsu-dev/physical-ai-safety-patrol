@@ -21,6 +21,10 @@ heat 이벤트는 events.HeatCheck로 교차 확인해 출동·대피 명령을 
 관리자 잠금: .env에 ADMIN_PASSWORD를 적으면 경보 닫기 · 출발 · 명령 · 모드 변경은
 헤더 X-Admin-Password가 맞을 때만 받는다 (틀리면 401). 비워 두면 잠그지 않는다 (개발용).
 
+대피 안내: evacuate가 되면 dispatch.plan으로 마커마다 출구 방향을 구해 대시보드에
+{"kind": "evac", "fire": 불난 마커 또는 null, "exits": [15], "arrows": [{"marker", "dir", "exit", "path"}, ...]}를 보내고,
+마커와 보는 방향을 아는 로봇에는 guide(arrow)를 보낸다. normal로 돌아가면 대피 안내도 끝 (mode 메시지로 앎).
+
 출발은 서버 자동 (normal 모드일 때 1초마다): 빈 역할이 있으면 도크에서 쉬는 로봇 중 배터리가 가장 많은 로봇에 patrol.
 관리자가 stop을 보낸 로봇은 patrol · resume을 직접 보내기 전까지 자동 출발에서 뺀다.
 
@@ -43,6 +47,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from common import protocol
+from server import dispatch, map_config
 from server.events import EventLog, HeatCheck
 from server.fleet import ONLINE_SEC, Fleet
 
@@ -89,6 +94,7 @@ class Server:
         self.clock = clock
         self.auto_start = auto_start
         self.held = set()   # 관리자가 stop을 보낸 로봇 (자동 출발 안 함)
+        self.evac = None    # 대피 중이면 대시보드로 보낸 대피 안내
         self.admin_password = admin_password or None   # 없으면 잠그지 않음
         self.fleet = Fleet(clock=clock)
         self.linked = {}    # 로봇 → 지난번에 본 연결 상태 (끊김·다시 붙음을 화면에 알리려고)
@@ -191,6 +197,7 @@ class Server:
     def snapshot(self):
         return ([self.state_msg(r) for r in sorted(self.fleet.robots)]
                 + [{"kind": "mode", "mode": self.mode}]
+                + ([self.evac] if self.evac else [])
                 + self.events.open_events())
 
     def send_all(self, pairs):
@@ -204,8 +211,21 @@ class Server:
         self.mode = mode
         if mode == "normal":
             self.heat.reset()
+            self.evac = None
         self.publish(protocol.MODE_TOPIC, {"mode": mode})
         self.hub.push({"kind": "mode", "mode": mode})
+        if mode == "evacuate":
+            self.start_evac()
+
+    def start_evac(self):
+        """마커마다 출구 방향을 구해 대시보드로 보내고, 로봇마다 화살표(guide)를 보낸다"""
+        fire = self.heat.confirmed
+        arrows = dispatch.plan(fire=fire)
+        self.evac = {"kind": "evac", "fire": fire, "exits": list(map_config.EXITS), "arrows": arrows}
+        self.hub.push(self.evac)
+        for robot, cmd in dispatch.guide_commands(self.fleet, arrows):
+            log.info("대피 안내 %s 화살표 %s", robot, cmd["arrow"])
+            self.publish(protocol.topic(robot, "cmd"), cmd)
 
     def is_admin(self, password):
         if not self.admin_password:
@@ -376,6 +396,9 @@ def selfcheck():
                 # 대피 모드
                 assert c.post("/mode", json={"mode": "evacuate"}).json() == {"mode": "evacuate"}
                 assert ws.receive_json() == {"kind": "mode", "mode": "evacuate"}
+                ev = ws.receive_json()
+                assert ev["kind"] == "evac" and ev["fire"] is None and ev["exits"] == map_config.EXITS
+                assert {a["marker"] for a in ev["arrows"]} == set(map_config.MARKERS)
                 assert c.post("/mode", json={"mode": "panic"}).status_code == 400
                 # 명령 직접 보내기
                 assert c.post("/robots/A/cmd", json={"cmd": "guide", "arrow": "left"}).status_code == 200
@@ -385,10 +408,17 @@ def selfcheck():
             c.post("/mode", json={"mode": "normal"})
             srv.on_mqtt("potent/A/state", protocol.pack({"marker": 7, "status": "heat_check", "battery": 88}))
             srv.on_mqtt("potent/B/state", protocol.pack({"marker": 3, "status": "patrol", "battery": 70}))
+            srv.on_mqtt("potent/B/state", protocol.pack({"marker": 4, "status": "patrol", "battery": 70}))  # 3 → 4: 동쪽
             srv.on_mqtt("potent/A/event", protocol.pack(protocol.event("heat", marker=7, temp_c=52, flame=True)))
             assert srv.sent[-2:] == [("potent/A/cmd", {"cmd": "wait"}), ("potent/B/cmd", {"cmd": "go", "zone": 7})]
             srv.on_mqtt("potent/B/event", protocol.pack(protocol.event("heat", marker=7, temp_c=51, flame=False)))
-            assert srv.mode == "evacuate" and srv.sent[-1] == ("potent/mode", {"mode": "evacuate"})
+            b_guide = [m for t, m in srv.sent if t == "potent/B/cmd" and m["cmd"] == "guide"]
+            assert b_guide and b_guide[-1]["arrow"] in ("left", "right", "up", "x"), b_guide
+            assert srv.mode == "evacuate" and ("potent/mode", {"mode": "evacuate"}) in srv.sent
+            # 대피 안내: 불난 7번은 x, 다른 마커는 7을 피해 출구로. 방향을 아는 로봇에 guide
+            arrows = {a["marker"]: a for a in srv.evac["arrows"]}
+            assert srv.evac["fire"] == 7 and arrows[7]["dir"] == "x" and all(7 not in a["path"] for a in arrows.values())
+            assert any(m.get("kind") == "evac" for m in srv.snapshot())     # 새로 연 대시보드도 받음
             # 연결 끊김: A만 계속 보내고 B는 조용 → ONLINE_SEC 넘으면 화면에 B online false 한 번
             with c.websocket_connect("/ws") as ws:
                 n = len(srv.snapshot())
@@ -426,7 +456,7 @@ def selfcheck():
             for n, b in (("A", 70), ("B", 90), ("C", 99)):
                 srv.on_mqtt(f"potent/{n}/state", protocol.pack({"marker": 15, "status": "idle", "battery": b}))
             srv.tick()
-            assert srv.sent == [("potent/mode", {"mode": "evacuate"})]   # 대피 중엔 출발 안 함
+            assert not [m for _, m in srv.sent if m.get("cmd") == "patrol"]   # 대피 중엔 출발 안 함
             c.post("/mode", json={"mode": "normal"})
             c.post("/robots/C/cmd", json={"cmd": "resume"})              # 관리자가 풀면 다시 대상
             srv.sent.clear()

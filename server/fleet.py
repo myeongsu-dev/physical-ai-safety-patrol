@@ -24,10 +24,16 @@ class Fleet:
         self.robots = {}    # 로봇 이름 → 마지막 state + seen(받은 시각)
         self.roles = {}     # 역할 → 로봇 이름 (서버가 정한 것)
         self.started = {}   # 로봇 → patrol을 보낸 시각
+        self.heading = {}   # 로봇 → 보는 방향(N·E·S·W). 마커가 바뀔 때 지난 마커 → 새 마커 방향으로 추정
 
     # ---------- 상태 받기 ----------
     def update_state(self, robot, msg):
         """potent/{robot}/state 를 받을 때마다 호출."""
+        prev = self.robots.get(robot, {}).get("marker")
+        new = msg.get("marker")
+        if prev in map_config.MARKERS and new in map_config.MARKERS and prev != new:
+            from server.dispatch import compass
+            self.heading[robot] = compass(prev, new)
         self.robots[robot] = {**msg, "seen": self.clock()}
         role = msg.get("role")        # 서버를 다시 켰을 때: 순찰 중인 로봇이 알려 주는 역할로 복구
         if role in protocol.ROLES and msg.get("status") in ON_DUTY and role not in self.roles:

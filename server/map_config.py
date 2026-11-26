@@ -29,6 +29,7 @@ MARKERS = {
 }
 DOCK_MARKER = 15
 DOCK_LANE = (14, 15)          # 한 번에 한 대만 지나가는 도크 길
+EXITS = [15]                  # 대피 출구 마커 (임시: 관리실. 팀이 출구를 정하면 고침, 여러 개 가능)
 
 # ---------- 순찰 순서 ----------
 # entry: 도크에서 나가며 지나는 마커, loop: 끝없이 반복하는 고리, back: 충전 복귀 때 지나는 마커
@@ -105,4 +106,5 @@ if __name__ == "__main__":
     assert turn("A", 12, "W", 30) == "straight" and turn("A", 12, "W", 25) == "left"
     assert turn("B", 7, "E", 10) == "left" and turn("B", 7, "W", 20) == "left" and turn("B", 7, "W", 80) == "straight"
     assert turn("B", 1, "N") == "follow"
+    assert all(e in MARKERS for e in EXITS)
     print("map_config OK: 마커", len(MARKERS), "개, A 고리", len(ROUTES["A"]["loop"]), "· B 고리", len(ROUTES["B"]["loop"]))
