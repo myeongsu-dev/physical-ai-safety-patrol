@@ -1,6 +1,7 @@
 """셀프 체크: python firmware/dog/sim_check.py
 가짜 Hiwonder 모듈로 main.py를 PC에서 불러 명령 처리·자동 정지·초음파 정지·2초 감시를 확인한다 (실제 로봇 없이)."""
 import importlib.util
+import subprocess  # noqa: F401  아래 가짜 select를 끼우기 전에 불러 둠 (Linux subprocess는 select.select를 씀, upload.py가 import)
 import sys
 import time
 import types
