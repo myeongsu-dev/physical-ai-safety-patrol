@@ -136,6 +136,20 @@ dt.tick_motion(); assert moves[-1] == (0, 0)
 sonar_cm[0] = 25.0
 dt.tick_motion(); assert moves[-1] == (50, 0) and "|resume|25.0|" in sent[-1]
 cmd("S")
+# 마지막 안전장치: M · F로 앞으로 걷는 중 앞 10 cm 안이 3번(0.1초 간격) 연속이면 멈추고 E|stop
+sonar_cm[0] = 8.0
+clock[0] = 5000  # 위 시험이 시계를 되돌려 놓아서
+cmd("M", 50, 10, 5000)
+for _ in range(2):
+    clock[0] += 100; dt.tick_motion()
+assert moves[-1] == (50, 10)
+clock[0] += 100; sent.clear(); dt.tick_motion()
+assert moves[-1] == (0, 0) and dt.st["mode"] is None and any("|stop|8.0|" in x for x in sent), sent
+cmd("M", -50, 0, 5000)                                # 뒤로 걷기 · 제자리는 앞을 막아도 안 멈춤
+for _ in range(4):
+    clock[0] += 100; dt.tick_motion()
+assert moves[-1] == (-50, 0)
+cmd("S"); sonar_cm[0] = 25.0
 # 선 따라가기: 선 x=80(가운데)이면 직진
 cmd("F", 50, 25, 10000); dt.tick_motion(); assert moves[-1] == (50, 0)
 

@@ -10,7 +10,7 @@ import time
 import Hiwonder_IIC
 from HW_MechDog import MechDog
 
-VERSION = "dog-1.15.0"  # 올리는 규칙은 README "버전". upload.py가 올릴 때 뒤에 +해시를 붙임
+VERSION = "dog-1.16.0"  # 올리는 규칙은 README "버전". upload.py가 올릴 때 뒤에 +해시를 붙임
 MAX_MS = 15000   # 이동 명령 한 번의 최대 시간
 QUIET_MS = 2000  # Pi가 이만큼 조용하면 정지 + LED 오류
 # 걸음: 발 드는 시간 · 딛는 시간(ms) · 다리 드는 높이 (공식 예제 change_gait_parameter.py 값). 켤 때 넣고, G로 바꿀 수 있음.
@@ -41,7 +41,7 @@ line_color = getattr(cam, "BLACK", 0) if cam else 0
 # 지금 하고 있는 일: until(이동 끝 시각), mode(None/move/follow/guard), 스트림 주기·채널, rx(Pi에게서 마지막으로 받은 시각)
 st = {"until": None, "mode": None, "args": None, "period": 0, "chans": [], "events": [], "t0": 0, "last": {}, "guard": None,
       "rx": 0, "alarm": False, "led": None, "steer": 0,
-      "i": 0.0, "ft": 0, "win": [], "search": None, "side": 0, "pivot": 0}
+      "i": 0.0, "ft": 0, "win": [], "search": None, "side": 0, "pivot": 0, "bt": 0, "block": 0}
 # i · ft · win: 선 따라가기의 쌓인 오차 · 지난 반복 시각 · 한 걸음 기록. search: 선을 찾는 중이면 (시작 시각, 시작 yaw). side: 마지막으로 본 선 쪽(+ 왼쪽)
 
 
@@ -178,7 +178,7 @@ def run_for(ms, mode, args):
 
 def c_move(stride, angle, ms):
     dog.move(int(stride), int(angle))
-    run_for(ms, "move", None)
+    run_for(ms, "move", (int(stride), int(angle)))
 
 
 def c_follow(stride, angle, ms):
@@ -399,11 +399,35 @@ def tick_follow(stride, amax):
     dog.move(stride, a)
 
 
+# 마지막 안전장치: M · F로 앞으로 걷는 중 앞이 BLOCK_CM 안이면 0.1초 간격 3번 연속으로 멈추고 E|stop (Pi가 장애물 정지로 받음).
+# Pi 정지(edge SONAR_STOP_CM 14)가 먼저고, Pi 없이 시험 도구로 움직이거나 Pi가 늦을 때 벽에 박지 않게 (2026-11-27 벽에 부딪혀도 계속 걸음).
+# 초음파는 앞만 보므로 옆 · 뒤 충돌은 못 막음
+BLOCK_CM = 10.0
+
+
+def tick_block():
+    if st["mode"] not in ("move", "follow") or st["args"][0] <= 0:
+        return
+    t = now()
+    if time.ticks_diff(t, st["bt"]) < 100:
+        return
+    st["bt"] = t
+    d = read("sonar")
+    if d < 0:
+        return
+    st["block"] = st["block"] + 1 if d < BLOCK_CM else 0
+    if st["block"] >= 3:
+        st["block"] = 0
+        stop()
+        send("E", time.ticks_diff(t, st["t0"]), "stop", d)
+
+
 def tick_motion():
     if st["until"] is not None and time.ticks_diff(now(), st["until"]) >= 0:
         stop()
         send("E", time.ticks_diff(now(), st["t0"]), "done", 1)
         return
+    tick_block()
     if st["mode"] == "follow":
         tick_follow(*st["args"])
     elif st["mode"] == "guard":
