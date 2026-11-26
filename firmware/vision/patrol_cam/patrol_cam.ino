@@ -4,11 +4,17 @@
 //      검정은 0xA8(화면 위 구역)·0xA9(가운데 구역, 못 찾으면 아래 구역), 7바이트. 0xB0은 세 구역 21바이트 [ID 5, 중심x, 중심y, 좌상x, 좌상y, 우하x, 우하y].
 //      좌표는 160x120 기준(가운데 x=80). 다른 레지스터는 0.
 //   2. 영상 보내기 (켤 때만): USB 시리얼로 JPEG를 이어 보낸다. 찾은 선 상자와 구역 경계를 그려서 보냄.
-// USB 시리얼 명령 (줄 단위): STREAM 1 / STREAM 0, THR <1~254> (검정 기준 밝기, 저장됨), INFO
+//      Wi-Fi를 저장해 두면 http://patrol-cam.local/stream (MJPEG)으로도 보낸다. 받는 쪽이 붙어 있는 동안만 만든다.
+// USB 시리얼 명령 (줄 단위): STREAM 1 / STREAM 0, THR <1~254> (검정 기준 밝기, 저장됨), INFO,
+//   SCAN (보이는 2.4GHz Wi-Fi 목록), WIFI <이름>\t<비밀번호> (저장하고 붙음, 이름 없이 WIFI면 지움)
 // 빌드·굽기는 firmware/vision/README.md
 #include <Arduino.h>
 #include <Wire.h>
 #include <Preferences.h>
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#include "esp_http_server.h"
+#include "lwip/sockets.h"
 #include "esp_camera.h"
 #include "img_converters.h"
 
@@ -65,6 +71,14 @@ static volatile bool streaming = false;
 static uint16_t *shot = NULL;  // 영상용 복사본 (PSRAM)
 static SemaphoreHandle_t shotReady, shotFree;
 static volatile uint32_t frames = 0;
+#define HOSTNAME "patrol-cam"
+// Wi-Fi 영상: streamTask가 만든 마지막 JPEG를 넘겨받아 /stream이 보냄
+static SemaphoreHandle_t webLock;
+static uint8_t *webJpg = NULL;
+static size_t webLen = 0;
+static volatile uint32_t webSeq = 0;
+static volatile int webClients = 0;
+static httpd_handle_t httpd = NULL;
 
 // ---------- I2C (MechDog 보드가 readfrom_mem(0x53, 레지스터, 7)로 읽음) ----------
 static void onReceive(int n) {
@@ -186,7 +200,7 @@ static void detectTask(void *) {
     memcpy(regs[0xA9], a9, 7);
     portEXIT_CRITICAL(&regLock);
     frames++;
-    if (streaming && xSemaphoreTake(shotFree, 0) == pdTRUE) {
+    if ((streaming || webClients) && xSemaphoreTake(shotFree, 0) == pdTRUE) {
       memcpy(shot, fb->buf, W * H * 2);
       for (int x = 0; x < W; x++) { shot[BAND * 2 * W + x] = GRAY; shot[BAND * 4 * W + x] = GRAY; }
       if (a8[0]) rect(shot, a8[3], a8[4], a8[5], a8[6], GREEN);
@@ -204,12 +218,87 @@ static void streamTask(void *) {
     if (xSemaphoreTake(shotReady, portMAX_DELAY) != pdTRUE) continue;
     uint8_t *jpg = NULL;
     size_t len = 0;
-    if (fmt2jpg((uint8_t *)shot, W * H * 2, W, H, PIXFORMAT_RGB565, 40, &jpg, &len) && streaming) {
-      Serial.write(jpg, len);
+    if (fmt2jpg((uint8_t *)shot, W * H * 2, W, H, PIXFORMAT_RGB565, 40, &jpg, &len)) {
+      if (streaming) Serial.write(jpg, len);
+      if (webClients) {  // 마지막 장만 남김 (보내는 쪽이 늦으면 건너뜀)
+        xSemaphoreTake(webLock, portMAX_DELAY);
+        free(webJpg);
+        webJpg = jpg; webLen = len; webSeq++;
+        jpg = NULL;
+        xSemaphoreGive(webLock);
+      }
     }
     free(jpg);
     xSemaphoreGive(shotFree);
   }
+}
+
+// shortcut: httpd 태스크 하나가 이 함수에 머무르므로 한 번에 한 곳(Pi의 view.py)만 받음. 여러 곳이 볼 때는 Pi가 다시 나눠 줌
+// 한 장(머리 + JPEG + 줄바꿈)을 한 번에 보냄. 조각으로 나눠 보내면 약한 신호에서 앞 조각 확인을 기다리느라
+// 수백 ms씩 멈춤 (2026-11-26 -71 dBm에서 초당 0.5~7.5장으로 흔들림)
+static bool sendAll(httpd_req_t *req, const char *p, size_t n) {
+  while (n) {
+    int k = httpd_send(req, p, n);
+    if (k <= 0) return false;
+    p += k; n -= k;
+  }
+  return true;
+}
+
+static esp_err_t streamHandler(httpd_req_t *req) {
+  int one = 1;
+  setsockopt(httpd_req_to_sockfd(req), IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);  // 작은 끝 조각도 바로 보냄
+  static const char HEAD[] = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=f\r\nCache-Control: no-cache\r\n\r\n";
+  if (!sendAll(req, HEAD, sizeof HEAD - 1)) return ESP_FAIL;
+  // view.py는 USB가 없을 때만 Wi-Fi로 붙음. USB를 뽑아도 모듈은 모르고 UART로 계속 보내 Wi-Fi가 막힘
+  // (2026-11-26: USB와 같이 보내면 초당 5.2장 · 핑 279 ms, Wi-Fi만이면 8.5장 · 36 ms)
+  streaming = false;
+  webClients++;
+  uint32_t seen = webSeq;
+  uint8_t *buf = NULL;
+  size_t cap = 0;
+  uint32_t t0 = millis();
+  for (;;) {
+    if (webSeq == seen) {
+      if (millis() - t0 > 3000) break;  // 카메라가 멈췄으면 끊고 받는 쪽이 다시 붙게
+      delay(5);
+      continue;
+    }
+    const size_t HMAX = 80;
+    xSemaphoreTake(webLock, portMAX_DELAY);
+    size_t len = webLen;
+    seen = webSeq;
+    if (HMAX + len + 2 > cap) { free(buf); cap = HMAX + len + 2; buf = (uint8_t *)malloc(cap); if (!buf) cap = 0; }
+    int n = 0;
+    if (buf) {
+      n = snprintf((char *)buf, HMAX, "--f\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", (unsigned)len);
+      memcpy(buf + n, webJpg, len);
+    }
+    xSemaphoreGive(webLock);
+    if (!buf) break;
+    memcpy(buf + n + len, "\r\n", 2);
+    if (!sendAll(req, (const char *)buf, n + len + 2)) break;
+    t0 = millis();
+  }
+  free(buf);
+  webClients--;
+  return ESP_FAIL;  // 끊김 (연결을 닫음)
+}
+
+// 저장된 Wi-Fi로 붙고 /stream을 연다. 이름이 없으면 Wi-Fi를 끔
+static void startWifi() {
+  String ssid = prefs.getString("ssid", ""), pass = prefs.getString("pass", "");
+  if (!ssid.length()) { WiFi.mode(WIFI_OFF); return; }
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname(HOSTNAME);
+  WiFi.setSleep(false);  // 절전 켜면 영상이 100 ms 넘게 밀림
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  if (httpd) return;
+  httpd_config_t c = HTTPD_DEFAULT_CONFIG();
+  c.core_id = 0;  // 선 찾기(코어 1)와 떨어뜨림
+  httpd_uri_t u = {};
+  u.uri = "/stream"; u.method = HTTP_GET; u.handler = streamHandler;
+  if (httpd_start(&httpd, &c) == ESP_OK) httpd_register_uri_handler(httpd, &u);
 }
 
 static bool startCamera() {
@@ -243,6 +332,8 @@ void setup() {
   shotReady = xSemaphoreCreateBinary();
   shotFree = xSemaphoreCreateBinary();
   xSemaphoreGive(shotFree);
+  webLock = xSemaphoreCreateMutex();
+  startWifi();
   Wire.onReceive(onReceive);
   Wire.onRequest(onRequest);
   Wire.begin((uint8_t)I2C_ADDR, I2C_SDA, I2C_SCL, 100000);
@@ -255,15 +346,33 @@ void setup() {
 void loop() {
   static String line;
   static uint32_t t0 = millis(), f0 = 0;
+  static bool mdns = false;
+  if (!mdns && WiFi.status() == WL_CONNECTED && MDNS.begin(HOSTNAME)) {  // 붙은 뒤에 이름을 알림
+    MDNS.addService("http", "tcp", 80);
+    mdns = true;
+  }
   while (Serial.available()) {
     char ch = Serial.read();
-    if (ch != '\n') { if (line.length() < 40) line += ch; continue; }
+    if (ch != '\n') { if (line.length() < 120) line += ch; continue; }
     line.trim();
     if (line == "STREAM 1") streaming = true;
     else if (line == "STREAM 0") streaming = false;
     else if (line.startsWith("THR ")) {
       int v = line.substring(4).toInt();
       if (v >= 1 && v <= 254) { thr = v; prefs.putUChar("thr", v); }
+    } else if (line == "SCAN") {
+      if (WiFi.getMode() == WIFI_OFF) WiFi.mode(WIFI_STA);
+      int n = WiFi.scanNetworks();
+      for (int i = 0; i < n; i++) Serial.printf("\nSCAN %d %s\n", WiFi.RSSI(i), WiFi.SSID(i).c_str());
+      if (!prefs.getString("ssid", "").length()) WiFi.mode(WIFI_OFF);
+    } else if (line.startsWith("WIFI")) {
+      String v = line.substring(5);
+      int tab = v.indexOf('\t');
+      prefs.putString("ssid", tab < 0 ? v : v.substring(0, tab));
+      prefs.putString("pass", tab < 0 ? "" : v.substring(tab + 1));
+      WiFi.disconnect();
+      mdns = false;
+      startWifi();
     }
     if (line.length()) {  // 영상 중에도 JPEG 사이에 끼어 나감 (받는 쪽은 FFD8~FFD9만 잘라 씀)
       uint8_t a9[7];
@@ -271,7 +380,9 @@ void loop() {
       memcpy(a9, regs[0xA9], 7);
       portEXIT_CRITICAL(&regLock);
       float fps = (frames - f0) * 1000.0 / max(1UL, millis() - t0);
-      Serial.printf("\nINFO stream=%d thr=%d fps=%.1f a9=%d,%d,%d\n", streaming, thr, fps, a9[0], a9[1], a9[2]);
+      String wifi = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : prefs.getString("ssid", "").length() ? "connecting" : "off";
+      Serial.printf("\nINFO stream=%d thr=%d fps=%.1f a9=%d,%d,%d wifi=%s web=%d\n", streaming, thr, fps, a9[0], a9[1], a9[2],
+                    wifi.c_str(), webClients);
       t0 = millis(); f0 = frames;
     }
     line = "";
