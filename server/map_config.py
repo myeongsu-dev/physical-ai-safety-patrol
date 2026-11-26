@@ -29,6 +29,7 @@ MARKERS = {
 }
 DOCK_MARKER = 15
 DOCK_LANE = (14, 15)          # 한 번에 한 대만 지나가는 도크 길
+EXITS = [5, 8]                # 대피 출구 마커: 5 = 비상구 1 옆, 8 = 비상구 2 옆 (15 충전 스테이션은 출구 아님)
 
 # ---------- 순찰 순서 ----------
 # entry: 도크에서 나가며 지나는 마커, loop: 끝없이 반복하는 고리, back: 충전 복귀 때 지나는 마커
@@ -46,12 +47,13 @@ ROUTES = {
 }
 
 # ---------- 충전 복귀 ----------
-# 도크 = 관리실: 로봇이 스스로 오면 사람이 충전하고 대시보드 "출발" 버튼으로 다시 내보낸다.
+# 도크 = 관리실: 로봇이 스스로 오면 사람이 충전하고, 배터리가 BATTERY_START 이상 차면 서버가 자동으로 다시 내보낸다.
 RETURN_POINT = {
     "A": {"marker": 12, "heading": "W"},
     "B": {"marker": 7, "heading": "W"},   # B는 7을 동쪽으로도 지나가므로 서쪽일 때만
 }
 BATTERY_RETURN = 25        # 복귀 지점에서 이 값 이하면 도크로
+BATTERY_START = 60         # 도크에서 이 값 이상이면 서버가 자동 출발 (임시, 실제 배터리 보고 조정)
 BATTERY_EMERGENCY = 15     # 어디서든 이 값 이하면 그 자리 정지 + 서버에 보고
 
 
@@ -104,4 +106,5 @@ if __name__ == "__main__":
     assert turn("A", 12, "W", 30) == "straight" and turn("A", 12, "W", 25) == "left"
     assert turn("B", 7, "E", 10) == "left" and turn("B", 7, "W", 20) == "left" and turn("B", 7, "W", 80) == "straight"
     assert turn("B", 1, "N") == "follow"
+    assert all(e in MARKERS for e in EXITS)
     print("map_config OK: 마커", len(MARKERS), "개, A 고리", len(ROUTES["A"]["loop"]), "· B 고리", len(ROUTES["B"]["loop"]))

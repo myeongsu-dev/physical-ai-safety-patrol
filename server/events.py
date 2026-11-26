@@ -34,7 +34,10 @@ class EventLog:
         self.db.execute("""CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             robot TEXT NOT NULL, type TEXT NOT NULL, ts INTEGER NOT NULL,
-            received REAL NOT NULL, body TEXT NOT NULL, checked REAL)""")
+            received REAL NOT NULL, body TEXT NOT NULL, checked REAL, false_alarm INTEGER)""")
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(events)")}
+        if "false_alarm" not in cols:                  # 예전 기록 파일이면 칸만 더함
+            self.db.execute("ALTER TABLE events ADD COLUMN false_alarm INTEGER")
         self.db.commit()
 
     def add(self, robot, msg):
@@ -47,29 +50,45 @@ class EventLog:
                 "INSERT INTO events (robot, type, ts, received, body) VALUES (?, ?, ?, ?, ?)",
                 (robot, msg["type"], ts, self.clock(), json.dumps(msg, ensure_ascii=False)))
             self.db.commit()
-            return self._row(cur.lastrowid, robot, json.dumps(msg, ensure_ascii=False), None)
+            return self._row(cur.lastrowid, robot, json.dumps(msg, ensure_ascii=False), None, None)
 
-    def check(self, event_id):
-        """관리자가 조치를 확인함. 없는 번호면 None"""
+    def check(self, event_id, false_alarm=False):
+        """관리자가 경보를 닫음. false_alarm=True면 오탐(로봇이 잘못 봄), 아니면 실제로 일어나 조치함.
+        이미 닫힌 경보는 그대로 둔다. 없는 번호면 None"""
         with self.lock:
-            cur = self.db.execute("UPDATE events SET checked = ? WHERE id = ? AND checked IS NULL",
-                                  (self.clock(), event_id))
+            self.db.execute("UPDATE events SET checked = ?, false_alarm = ? WHERE id = ? AND checked IS NULL",
+                            (self.clock(), int(bool(false_alarm)), event_id))
             self.db.commit()
-            row = self.db.execute("SELECT id, robot, body, checked FROM events WHERE id = ?",
-                                  (event_id,)).fetchone()
+            row = self.db.execute(f"SELECT {self.COLS} FROM events WHERE id = ?", (event_id,)).fetchone()
         return self._row(*row) if row else None
 
     def open_events(self, limit=100):
         """아직 해제 안 된 이벤트 (대시보드를 새로 열 때 채워 넣기용), 오래된 것부터"""
         with self.lock:
             rows = self.db.execute(
-                "SELECT id, robot, body, checked FROM events WHERE checked IS NULL ORDER BY id DESC LIMIT ?",
+                f"SELECT {self.COLS} FROM events WHERE checked IS NULL ORDER BY id DESC LIMIT ?",
                 (limit,)).fetchall()
         return [self._row(*r) for r in reversed(rows)]
 
+    def history(self, limit=50, before=None, type=None):
+        """지난 경보 목록 (닫힌 것 포함), 최근 것부터. before=id보다 앞의 것만 (다음 쪽 넘기기)"""
+        sql, args = f"SELECT {self.COLS} FROM events WHERE 1=1", []
+        if before is not None:
+            sql, args = sql + " AND id < ?", args + [before]
+        if type is not None:
+            sql, args = sql + " AND type = ?", args + [type]
+        with self.lock:
+            rows = self.db.execute(sql + " ORDER BY id DESC LIMIT ?", args + [limit]).fetchall()
+        return [self._row(*r) for r in rows]
+
+    COLS = "id, robot, body, checked, false_alarm"
+
     @staticmethod
-    def _row(event_id, robot, body, checked):
-        return {"kind": "event", "id": event_id, "robot": robot, **json.loads(body), "checked": checked is not None}
+    def _row(event_id, robot, body, checked, false_alarm):
+        """checked: 닫혔는지, checked_at: 닫은 시각(초), false_alarm: 오탐이면 true (안 닫혔으면 null)"""
+        return {"kind": "event", "id": event_id, "robot": robot, **json.loads(body),
+                "checked": checked is not None, "checked_at": checked,
+                "false_alarm": None if checked is None else bool(false_alarm)}
 
 
 class HeatCheck:
@@ -180,11 +199,33 @@ if __name__ == "__main__":
     assert e["kind"] == "event" and e["id"] == 1 and e["robot"] == "B" and e["type"] == "obstacle" and not e["checked"]
     log.add("C", protocol.event("helmet", marker=3, conf=0.8))
     assert [x["id"] for x in log.open_events()] == [1, 2]
-    assert log.check(1)["checked"] is True
+    assert log.open_events()[0]["false_alarm"] is None
+    c = log.check(1)
+    assert c["checked"] is True and c["checked_at"] == 1000.0 and c["false_alarm"] is False
     assert [x["id"] for x in log.open_events()] == [2]
     assert log.check(99) is None
+    assert log.check(2, false_alarm=True)["false_alarm"] is True     # 오탐으로 닫기
+    assert log.check(2)["false_alarm"] is True                        # 이미 닫힌 건 그대로
+    # 지난 경보: 닫힌 것까지 최근 것부터, before로 다음 쪽, type으로 거르기
+    log.add("A", protocol.event("obstacle", marker=5, sonar_cm=9, photo=None))
+    assert [x["id"] for x in log.history()] == [3, 2, 1]
+    assert [x["id"] for x in log.history(limit=1, before=3)] == [2]
+    assert [x["id"] for x in log.history(type="obstacle")] == [3, 1]
     try:
         log.add("A", {"type": "smoke"}); raise AssertionError("ValueError가 나야 함")
     except ValueError:
         pass
+    # 예전 기록 파일(false_alarm 칸 없음)도 그대로 열림
+    import os, tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        p = os.path.join(tmp, "old.sqlite3")
+        old = sqlite3.connect(p)
+        old.execute("CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, robot TEXT NOT NULL, type TEXT NOT NULL, "
+                    "ts INTEGER NOT NULL, received REAL NOT NULL, body TEXT NOT NULL, checked REAL)")
+        old.execute("INSERT INTO events (robot, type, ts, received, body, checked) VALUES "
+                    "('A', 'obstacle', 1, 1, '{\"type\": \"obstacle\"}', 5)")
+        old.commit(); old.close()
+        moved = EventLog(p)
+        assert moved.history()[0]["checked"] is True and moved.history()[0]["false_alarm"] is False
+        moved.db.close()
     print("events ok")
