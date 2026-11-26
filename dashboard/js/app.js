@@ -2,7 +2,7 @@
 // 지도: 바탕(구역, 통로, 마커, 비상구, 충전 스테이션) 위에 화재 위치, 대피 화살표, (관리자 화면) 로봇 위치를 얹는다.
 
 import {
-  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, evacView, loadHistory, alarmStats, robotStop,
+  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, evacView, loadHistory, alarmStats, robotStop, helmetLog,
 } from "./store.js";
 import { connect, request } from "./conn.js";
 import { FakeServer } from "./fake.js";
@@ -12,6 +12,9 @@ import { createAlarm } from "./sound.js";
 
 const store = createStore();
 const params = new URLSearchParams(location.search);
+// 안전모 미착용 기록 칸 (관리자 화면, 사진 없음). 팀이 빼기로 하면 false로 바꾸면 된다.
+// 꺼도 안전모 경보는 지금처럼 팝업 · 경보음 · 최근 경보 · 경보 이력 · 안전 현황에 나오지 않는다
+const SHOW_HELMET = true;
 // 주소에 ?admin을 붙이면 관리자 화면. 서버가 잠가 두었으면 비밀번호를 물은 뒤에 연다 (README "관리자 잠금")
 const admin = params.has("admin");
 // ?fake면 가짜 서버. ?fake&lock이면 가짜 서버도 비밀번호(FAKE_PASSWORD)로 잠그고, ?fake&past면 지난 경보 40건을 미리 넣는다
@@ -230,6 +233,9 @@ function renderAlerts() {
     renderDetail(shown);
     renderPopup();
     renderHistory(shown);
+    // 정탐률 · 안전모 기록은 각자 바뀐 게 있을 때만 다시 그린다 (안전모 경보는 경보 이력 표에 안 나와서 따로)
+    renderStats();
+    if (SHOW_HELMET) renderHelmet(Date.now());
   }
 }
 
@@ -295,7 +301,6 @@ function renderHistory(shown) {
   else if (past.status === "loading" && list.length) more += `<span class="muted">받는 중</span>`;
   else if (canMore) more += `<button type="button" class="more-btn" data-more="1">더 보기</button>`;
   document.getElementById("history-more").innerHTML = more;
-  renderStats();
 }
 
 // 정탐률 (닫은 경보 중 실제였던 비율). 화면이 가진 경보 이력만 센다
@@ -312,6 +317,26 @@ function renderStats() {
     ${row("전체", st.total)}${st.rows.map((r) => row(ALERT_TEXT[r.type]?.[0] ?? r.type, r)).join("")}
   </tbody></table>
   <p class="stat-note">정탐은 "경보 해제", 오탐은 "오탐"으로 해제한 것. 해제 전 경보와 로봇이 놓친 위험은 세지 않습니다. 경보 이력에 받아 온 경보 기준</p>`;
+}
+
+// 안전모 미착용 기록: 오늘 · 전체 건수, 자주 나온 위치, 최근 기록. 사진은 보여 주지 않는다
+let helmetKey = "";
+function renderHelmet(now) {
+  const h = helmetLog(store, now);
+  const key = JSON.stringify([h, new Date(now).toDateString()]);
+  if (key === helmetKey) return;
+  helmetKey = key;
+  const el = document.getElementById("helmet");
+  if (!h.total) {
+    el.innerHTML = `<p class="empty">기록이 없습니다</p>`;
+    return;
+  }
+  const top = h.byMarker.slice(0, 3).map((m) => `마커 ${esc(m.marker)} ${m.count}건`).join(", ");
+  el.innerHTML = `<p class="helmet-count"><b>오늘 ${h.today}건</b> <span class="muted">받아 온 기록 ${h.total}건</span></p>
+    ${top ? `<p class="helmet-where"><span class="muted">자주 나온 위치</span> ${top}</p>` : ""}
+    <table class="stat-table helmet-recent"><tbody>${h.recent.map((e) => `<tr>
+      <td>${e.ts ? whenText(e.ts) : "-"}</td><td>${e.marker != null ? `마커 ${esc(e.marker)}` : "-"}</td><td class="muted">${esc(robotLabel(e.robot))}</td>
+    </tr>`).join("")}</tbody></table>`;
 }
 
 // 경보 시각: 오늘이면 시:분:초, 아니면 월.일 시:분
@@ -823,6 +848,7 @@ if (admin) {
   document.getElementById("detail-panel").hidden = false;
   document.getElementById("history-panel").hidden = false;
   document.getElementById("stats-panel").hidden = false;
+  document.getElementById("helmet-panel").hidden = !SHOW_HELMET;
   document.getElementById("sound").hidden = false;
   renderSoundButton();
   document.addEventListener("click", onClick);

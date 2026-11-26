@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN, RETURN_POINT, EXITS } from "./js/mapdata.js";
 import { FakeServer, EVENT_TYPES, evacPlan } from "./js/fake.js";
-import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, evacView, loadHistory, alarmStats, robotStop, ONLINE_SEC } from "./js/store.js";
+import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, evacView, loadHistory, alarmStats, robotStop, helmetLog, ONLINE_SEC } from "./js/store.js";
 import { robotLayer, fireLayer, guideLayer, corridorPoints, MARKER_POS } from "./js/map.js";
 import { checkAdmin, withPassword, ADMIN_HEADER } from "./js/auth.js";
 
@@ -938,6 +938,43 @@ class FakeAudioContext {
   await tickWait();
   assert.ok(!/멈춤/.test(card()));
   assert.ok(!el("map .robots").innerHTML.includes("#ff9f1a"));
+  app.stop();
+}
+
+// ---------- 안전모 미착용 기록 (관리자 화면 따로 칸, 사진 없음) ----------
+{
+  const NOW = new Date(2026, 10, 26, 15, 0, 0).getTime();
+  const sec = (d, h) => Math.floor(new Date(2026, 10, d, h, 0, 0).getTime() / 1000);
+  const st = createStore();
+  apply(st, { kind: "event", id: 1, robot: "A", type: "helmet", ts: sec(25, 10), marker: 7, photo: "/photos/1.jpg", checked: false });
+  apply(st, { kind: "event", id: 2, robot: "B", type: "helmet", ts: sec(26, 9), marker: 7, checked: false });
+  apply(st, { kind: "event", id: 3, robot: "C", type: "helmet", ts: sec(26, 11), marker: 3, checked: false });
+  apply(st, { kind: "event", id: 4, robot: "C", type: "obstacle", ts: sec(26, 12), marker: 3, checked: false });
+  loadHistory(st, [{ kind: "event", id: 0, robot: "D", type: "helmet", ts: sec(24, 8), marker: 7, checked: true, false_alarm: false }]);
+  const h = helmetLog(st, NOW);
+  assert.equal(h.today, 2);
+  assert.equal(h.total, 4, "지난 경보에서 받아 온 것도 셈");
+  assert.deepEqual(h.byMarker, [{ marker: 7, count: 3 }, { marker: 3, count: 1 }]);
+  assert.deepEqual(h.recent.map((e) => e.id), [3, 2, 1, 0]);
+
+  // 화면: 안전모 칸에 오늘 건수와 위치, 사진은 없음. 팝업 · 최근 경보 · 경보 이력 · 안전 현황에는 여전히 안 나옴
+  const app = await bootApp("?fake&admin", "helmet");
+  const { el, fake } = app;
+  await tickWait(550);
+  assert.equal(el("helmet-panel").hidden, false);
+  assert.match(el("helmet").innerHTML, /기록이 없습니다/);
+  const levelBefore = el("level").textContent;
+  fake.robots.A.marker = 7;
+  const hm = fake.emit("helmet", "A");
+  await tickWait();
+  assert.match(el("helmet").innerHTML, /<b>오늘 1건<\/b>/);
+  assert.match(el("helmet").innerHTML, /마커 7 1건/);
+  assert.match(el("helmet").innerHTML, />MD-1</);
+  assert.ok(!/<img|photo/.test(el("helmet").innerHTML), "사진 없음");
+  assert.ok(!el("alerts").innerHTML.includes(`data-alert="${hm.id}"`));
+  assert.ok(!el("history").innerHTML.includes(`data-alert="${hm.id}"`));
+  assert.equal(el("popup").hidden, true);
+  assert.equal(el("level").textContent, levelBefore);
   app.stop();
 }
 

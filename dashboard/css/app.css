@@ -476,6 +476,12 @@ ul { list-style: none; margin: 0; padding: 0; }
 .stat-table td:nth-child(2) { width: 48px; text-align: right; padding-right: 10px; }
 .stat-table td.muted { font-size: 12px; }
 .stat-table tr:first-child th, .stat-table tr:first-child td:nth-child(2) { color: var(--text); font-weight: 600; }
+/* 안전모 미착용 기록: 정탐률과 같은 작은 글씨 */
+.helmet-panel h2 { font-size: 14px; }
+.helmet-panel p { margin: 0 0 6px; font-size: 13px; }
+.helmet-panel .helmet-count b { font-size: 15px; }
+.helmet-panel .empty { color: var(--muted); }
+.helmet-recent td { padding: 3px 8px 3px 0; }
 .stat-note { margin: var(--gap) 0 0; color: var(--muted); font-size: 12px; }
 .history-more { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gap); margin-top: var(--gap); }
 .history-more:empty { display: none; }

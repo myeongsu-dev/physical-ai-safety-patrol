@@ -131,6 +131,19 @@ function withRate(r) {
   return { ...r, real, rate: r.closed ? real / r.closed : null };
 }
 
+// 안전모 미착용 기록 (관리자 화면 따로 칸, 사진 없음). 현장에서는 음성 안내로 처리하고, 대시보드는 기록만 본다.
+// 화면이 가진 경보 이력(이 화면을 연 뒤 받은 것 + 서버에서 꺼내 온 것)만 센다.
+//   today: 오늘 건수, total: 전체 건수, byMarker: 위치별 건수(많은 순), recent: 최근 기록(새것부터)
+export function helmetLog(store, now = Date.now(), recentMax = 5) {
+  const list = [...store.history.values()].map((h) => h.event).filter((e) => e.type === "helmet").sort((a, b) => b.id - a.id);
+  const day = new Date(now).toDateString();
+  const today = list.filter((e) => e.ts && new Date(e.ts * 1000).toDateString() === day).length;
+  const counts = new Map();
+  for (const e of list) if (e.marker != null) counts.set(e.marker, (counts.get(e.marker) ?? 0) + 1);
+  const byMarker = [...counts].map(([marker, count]) => ({ marker, count })).sort((a, b) => b.count - a.count || a.marker - b.marker);
+  return { today, total: list.length, byMarker, recent: list.slice(0, recentMax) };
+}
+
 // 경보 이력, 새것부터. 안전모 미착용은 뺀다 (openAlerts와 같은 기준)
 export function alertHistory(store, limit = 50) {
   return [...store.history.values()]
