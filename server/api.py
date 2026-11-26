@@ -9,18 +9,24 @@ heat 이벤트는 events.HeatCheck로 교차 확인해 출동·대피 명령을 
 | WebSocket /ws | 붙자마자 지금 상태(state 전부·mode·해제 안 된 event) → 이후 새 메시지 |
 | POST /photos | Pi 사진 받기 (form: file, robot) → {"url": "/photos/이름"} |
 | GET /photos/{이름} | 사진 |
-| POST /events/{id}/check | 관리자가 확인하고 해제 |
+| POST /events/{id}/check | 관리자가 경보를 닫음. body {"false_alarm": true}면 오탐으로 저장 (body 없으면 정탐) |
+| GET /events?limit=50&before=id&type=heat | 지난 경보 목록 (닫힌 것 포함), 최근 것부터 |
+| GET /admin/check | 관리자 비밀번호 맞는지 (맞으면 200, 틀리면 401) |
 | POST /fleet/start | 비어 있는 역할(A·B)을 대기 로봇에게 나눠 주며 출발 |
 | POST /robots/{로봇}/patrol?role=A | 역할을 직접 정해 출발 |
 | POST /robots/{로봇}/cmd | 명령 직접 보내기 (body: {"cmd": "stop"} 등) |
 | POST /mode | {"mode": "normal" · "evacuate"} (normal로 돌리면 교차 확인도 처음부터) |
 | GET /status | 지금 상태 (확인용) |
 
+관리자 잠금: .env에 ADMIN_PASSWORD를 적으면 경보 닫기 · 출발 · 명령 · 모드 변경은
+헤더 X-Admin-Password가 맞을 때만 받는다 (틀리면 401). 비워 두면 잠그지 않는다 (개발용).
+
 state 메시지의 online이 false면 연결 끊김 (ONLINE_SEC초 넘게 state 없음). 끊길 때 한 번, 다시 붙을 때 다시 보낸다.
 | / | dashboard/ 폴더 (index.html이 생기면) |
 """
 import argparse
 import asyncio
+import hmac
 import logging
 import os
 import re
@@ -29,7 +35,7 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -76,8 +82,9 @@ class Server:
     """MQTT와 화면 사이에서 상태를 들고 있는 것. mqtt=False면 브로커 없이(시험용)."""
 
     def __init__(self, db_path=":memory:", photo_dir=PHOTO_DIR, mqtt=True, host="localhost", port=1883,
-                 clock=time.time):
+                 clock=time.time, admin_password=None):
         self.clock = clock
+        self.admin_password = admin_password or None   # 없으면 잠그지 않음
         self.fleet = Fleet(clock=clock)
         self.linked = {}    # 로봇 → 지난번에 본 연결 상태 (끊김·다시 붙음을 화면에 알리려고)
         self.events = EventLog(str(db_path))
@@ -191,6 +198,11 @@ class Server:
         self.publish(protocol.MODE_TOPIC, {"mode": mode})
         self.hub.push({"kind": "mode", "mode": mode})
 
+    def is_admin(self, password):
+        if not self.admin_password:
+            return True
+        return hmac.compare_digest((password or "").encode(), self.admin_password.encode())
+
 
 def create_app(server):
     @asynccontextmanager
@@ -210,6 +222,11 @@ def create_app(server):
         server.close()
 
     app = FastAPI(title="potent 관제 서버", lifespan=lifespan)
+
+    def admin(x_admin_password: str = Header(None)):
+        if not server.is_admin(x_admin_password):
+            raise HTTPException(401, "관리자 비밀번호가 틀림")
+    lock = [Depends(admin)]
 
     @app.websocket("/ws")
     async def ws(sock: WebSocket):
@@ -244,26 +261,34 @@ def create_app(server):
             raise HTTPException(404, "사진 없음")
         return FileResponse(p)
 
-    @app.post("/events/{event_id}/check")
-    def check_event(event_id: int):
-        e = server.events.check(event_id)
+    @app.post("/events/{event_id}/check", dependencies=lock)
+    def check_event(event_id: int, body: dict = None):
+        e = server.events.check(event_id, false_alarm=bool((body or {}).get("false_alarm")))
         if not e:
             raise HTTPException(404, "이벤트 없음")
         server.hub.push(e)
         return e
 
-    @app.post("/fleet/start")
+    @app.get("/events")
+    def list_events(limit: int = 50, before: int = None, type: str = None):
+        return server.events.history(limit=max(1, min(limit, 500)), before=before, type=type)
+
+    @app.get("/admin/check", dependencies=lock)
+    def admin_check():
+        return {"ok": True}
+
+    @app.post("/fleet/start", dependencies=lock)
     def fleet_start():
         return {"sent": server.send_all(server.fleet.auto_assign())}
 
-    @app.post("/robots/{robot}/patrol")
+    @app.post("/robots/{robot}/patrol", dependencies=lock)
     def robot_patrol(robot: str, role: str):
         try:
             return {"sent": server.send_all(server.fleet.assign(robot, role))}
         except ValueError as e:
             raise HTTPException(409, str(e))
 
-    @app.post("/robots/{robot}/cmd")
+    @app.post("/robots/{robot}/cmd", dependencies=lock)
     def robot_cmd(robot: str, body: dict):
         try:
             msg = protocol.command(body.pop("cmd", ""), **body)
@@ -271,7 +296,7 @@ def create_app(server):
             raise HTTPException(400, str(e))
         return {"sent": server.send_all([(protocol.topic(robot, "cmd"), msg)])}
 
-    @app.post("/mode")
+    @app.post("/mode", dependencies=lock)
     def set_mode(body: dict):
         try:
             server.set_mode(body.get("mode"))
@@ -317,10 +342,20 @@ def selfcheck():
                 srv.on_mqtt("potent/B/event", protocol.pack(protocol.event("obstacle", marker=14, sonar_cm=12, photo=url)))
                 e = ws.receive_json()
                 assert e["kind"] == "event" and e["robot"] == "B" and e["photo"] == url and not e["checked"]
-                # 체크로 해제
-                assert c.post(f"/events/{e['id']}/check").json()["checked"] is True
+                # 체크로 해제 (body 없으면 정탐), 오탐으로 닫기
+                r = c.post(f"/events/{e['id']}/check").json()
+                assert r["checked"] is True and r["false_alarm"] is False
                 assert ws.receive_json()["checked"] is True
                 assert c.post("/events/999/check").status_code == 404
+                srv.on_mqtt("potent/A/event", protocol.pack(protocol.event("helmet", marker=3, conf=0.6)))
+                e2 = ws.receive_json()
+                assert c.post(f"/events/{e2['id']}/check", json={"false_alarm": True}).json()["false_alarm"] is True
+                ws.receive_json()
+                # 지난 경보 목록: 닫힌 것까지 최근 것부터
+                h = c.get("/events").json()
+                assert [x["id"] for x in h] == [e2["id"], e["id"]] and h[0]["false_alarm"] is True
+                assert [x["id"] for x in c.get(f"/events?before={e2['id']}").json()] == [e["id"]]
+                assert [x["type"] for x in c.get("/events?type=helmet").json()] == ["helmet"]
                 # 대피 모드
                 assert c.post("/mode", json={"mode": "evacuate"}).json() == {"mode": "evacuate"}
                 assert ws.receive_json() == {"kind": "mode", "mode": "evacuate"}
@@ -354,6 +389,21 @@ def selfcheck():
                 assert m["robot"] == "B" and m["online"] is True
             assert ("potent/mode", {"mode": "evacuate"}) in srv.sent
             assert c.get("/status").json()["roles"] == {"A": "A", "B": "B"}
+        # 관리자 잠금: 비밀번호를 정하면 경보 닫기·출발·명령·모드는 맞는 헤더가 있어야 함
+        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, admin_password="pw1234")
+        with TestClient(create_app(srv)) as c:
+            ok = {"X-Admin-Password": "pw1234"}
+            assert c.get("/admin/check").status_code == 401
+            assert c.get("/admin/check", headers={"X-Admin-Password": "nope"}).status_code == 401
+            assert c.get("/admin/check", headers=ok).status_code == 200
+            assert c.post("/mode", json={"mode": "evacuate"}).status_code == 401 and srv.mode == "normal"
+            assert c.post("/mode", json={"mode": "evacuate"}, headers=ok).status_code == 200
+            assert c.post("/robots/A/cmd", json={"cmd": "stop"}).status_code == 401
+            assert c.post("/fleet/start").status_code == 401
+            srv.on_mqtt("potent/A/event", protocol.pack(protocol.event("helmet", marker=3, conf=0.6)))
+            assert c.post("/events/1/check").status_code == 401
+            assert c.post("/events/1/check", headers=ok).status_code == 200
+            assert c.get("/events").status_code == 200 and c.get("/status").status_code == 200   # 보기는 잠그지 않음
     print("api ok")
 
 
@@ -373,5 +423,7 @@ if __name__ == "__main__":
             pass
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", datefmt="%H:%M:%S")
         srv = Server(db_path=DB_PATH, host=os.getenv("MQTT_HOST", "localhost"),
-                     port=int(os.getenv("MQTT_PORT", "1883")))
+                     port=int(os.getenv("MQTT_PORT", "1883")), admin_password=os.getenv("ADMIN_PASSWORD"))
+        if not srv.admin_password:
+            log.warning("ADMIN_PASSWORD가 없어 관리자 요청을 잠그지 않음 (개발용)")
         uvicorn.run(create_app(srv), host="0.0.0.0", port=a.port)
