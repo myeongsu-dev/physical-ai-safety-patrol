@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>바닥 카메라</title>
+<style>
+  :root { --bg: #f4f5f7; --card: #fff; --text: #1d2127; --muted: #6b7380; --line: #e1e4e8;
+    --accent: #2f6fde; --good: #1f9d55; --warn: #d9822b; --bad: #c9372c; --fov: 47, 111, 222; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14171b; --card: #1d2126; --text: #e6e8eb; --muted: #9aa3ae; --line: #2c3138;
+      --accent: #5b93f0; --good: #3fbf74; --warn: #f0a24f; --bad: #ef6a5f; --fov: 91, 147, 240; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 20px; }
+  h1 { font-size: 18px; margin: 0; font-weight: 650; }
+  .chip { font-size: 13px; color: var(--muted); border: 1px solid var(--line); border-radius: 99px; padding: 2px 10px; }
+  .chip.off { color: var(--bad); border-color: var(--bad); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 0 20px 20px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .card h2 { font-size: 15px; margin: 0 0 10px; font-weight: 650; }
+  #video { width: 100%; aspect-ratio: 4 / 3; display: block; background: #000; border-radius: 8px; image-rendering: pixelated; }
+  .note { font-size: 13px; color: var(--muted); margin: 8px 0 0; }
+  ol.note { padding-left: 20px; } ol.note li { margin: 3px 0; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 9px 16px; cursor: pointer; background: var(--accent); color: #fff; }
+  button.stop { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  #verdict { margin: 12px 0 8px; padding: 12px 14px; border-radius: 10px; border-left: 5px solid var(--muted); background: var(--bg); }
+  #verdict b { display: block; font-size: 20px; }
+  #verdict.good { border-color: var(--good); } #verdict.good b { color: var(--good); }
+  #verdict.up, #verdict.down { border-color: var(--warn); } #verdict.up b, #verdict.down b { color: var(--warn); }
+  #verdict.none, #verdict.curve { border-color: var(--bad); } #verdict.none b, #verdict.curve b { color: var(--bad); }
+  #side { width: 100%; aspect-ratio: 16 / 9; display: block; border-radius: 8px; background: var(--bg); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 5px; }
+  [hidden] { display: none !important; }
+</style>
+<script type="importmap">{"imports": {"three": "/web/three/three.module.js", "three/addons/": "/web/three/addons/"}}</script>
+</head>
+<body>
+<header><h1>바닥 카메라</h1><span class="chip" id="fps">연결 중</span></header>
+<main>
+  <section class="card">
+    <h2>영상</h2>
+    <img id="video" src="/stream" alt="바닥 카메라 영상">
+    <p class="note">초록 상자: 찾은 검은 선 · 회색 줄: 구역 경계 (위 먼 구역, 가운데 구역)</p>
+  </section>
+  <section class="card">
+    <div class="row">
+      <h2>카메라 각도 맞추기</h2>
+      <button id="calib">시작</button>
+    </div>
+    <ol class="note" id="howto">
+      <li>로봇 앞 30 cm 이상이 곧은 테이프 구간에 세웁니다. 코너·테이프 끝·찢어진 곳이 화면에 들어오지 않게 합니다.</li>
+      <li>로봇을 테이프 가운데에 테이프와 나란히 둡니다. 영상에서 테이프가 화면 가운데 위아래로 지나가야 합니다.</li>
+      <li>주행할 때와 같은 상태로 둡니다. 서 있는 자세, Pi·배터리를 다 얹고 전원을 켠 채로 합니다(무게로 몸이 기울면 각도가 달라짐).</li>
+      <li>평평한 바닥에서, 테이프 위에 그림자·손·자 같은 검은 물건이 없게 합니다. 초록 상자가 테이프에 맞게 잡히는지 봅니다.</li>
+      <li>시작을 누르고 판정을 보며 경첩을 조금씩 꺾습니다. "좋음"이 2~3초 그대로면 손을 떼고 끝내기를 누릅니다.</li>
+    </ol>
+    <div id="panel" hidden>
+      <div id="verdict"><b id="vTitle">판정 기다리는 중</b><span id="vText"></span></div>
+      <canvas id="side"></canvas>
+      <div class="legend"><span><i style="background:rgb(var(--fov))"></i>지금 시야</span><span><i style="background:var(--muted)"></i>목표 각도</span><span id="reach"></span></div>
+      <p class="note" id="side3d">3D 모델 불러오는 중</p>
+    </div>
+  </section>
+</main>
+<script type="module">
+const $ = (id) => document.getElementById(id);
+let calib = false, deg = null, cfg = null;
+
+async function poll() {
+  try {
+    const s = await (await fetch("/state")).json();
+    cfg = s;
+    $("fps").textContent = `초당 ${s.fps.toFixed(1)}장`;
+    $("fps").classList.toggle("off", s.fps < 1);
+    calib = s.calib;
+    $("calib").textContent = calib ? "끝내기" : "시작";
+    $("calib").classList.toggle("stop", calib);
+    $("panel").hidden = !calib;
+    $("howto").hidden = calib;
+    if (calib) {
+      $("verdict").className = s.kind || "";
+      $("vTitle").textContent = s.title || "판정 기다리는 중";
+      $("vText").textContent = s.text || "";
+      deg = s.deg;
+      reach();
+      side?.set(deg, s);
+    }
+  } catch { $("fps").textContent = "연결 끊김"; $("fps").classList.add("off"); }
+}
+$("calib").onclick = async () => { await fetch(`/calib?on=${calib ? 0 : 1}`); poll(); };
+setInterval(poll, 500); poll();
+
+// 렌즈 높이와 세로 시야로 바닥이 보이는 범위 (렌즈 바로 아래에서 앞으로 cm)
+function reach() {
+  if (deg == null || !cfg?.lens_cm) { $("reach").textContent = ""; return; }
+  const r = Math.PI / 180, h = cfg.lens_cm, half = cfg.vfov / 2;
+  const at = (a) => a <= 0.5 ? "지평선 너머" : (h / Math.tan(a * r)).toFixed(0) + " cm";
+  $("reach").textContent = `바닥 ${at(deg + half)} ~ ${at(deg - half)} 앞, 화면 가운데 ${at(deg)}`;
+}
+
+// ---- 옆모습: 우리 CAD의 mechdog.glb (같은 폴더 web/, Pi에서 받음)에서 바닥 카메라(bCam)만 지금 각도로 돌림 ----
+let side = null;
+(async () => {
+  try {
+    const THREE = await import("three");
+    const { GLTFLoader } = await import("three/addons/loaders/GLTFLoader.js");
+    const { MeshoptDecoder } = await import("three/addons/libs/meshopt_decoder.module.js");
+    const gl = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder)
+      .loadAsync("/web/mechdog.glb");
+    const N = {};
+    gl.scene.traverse((o) => { if (o.name) N[o.name] = o; });
+    gl.scene.traverse((o) => { if (/__(sweep|ghost)$/.test(o.name)) o.visible = false; });
+    ["ghost", "headScrews"].forEach((n) => N[n] && (N[n].visible = false));
+    const dog = N.mechdog, cam = N.bCam;
+    const canvas = $("side");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(devicePixelRatio);
+    const scene = new THREE.Scene();
+    scene.add(gl.scene, new THREE.HemisphereLight(0xffffff, 0x667080, 2.2));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(1, 2, 3); scene.add(sun);
+
+    // 그림은 mechdog 좌표(mm, X 앞 · Y 위 · 바닥 Y=0)에 붙임
+    const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+    const fovCol = new THREE.Color(`rgb(${css("--fov")})`), mutedCol = new THREE.Color(css("--muted"));
+    const wedge = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: fovCol, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }));
+    const edges = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: fovCol }));
+    const target = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineDashedMaterial({ color: mutedCol, dashSize: 6, gapSize: 4 }));
+    const floor = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-160, 0, 60), new THREE.Vector3(520, 0, 60)]), new THREE.LineBasicMaterial({ color: mutedCol }));
+    dog.add(wedge, edges, target, floor);
+
+    const view = new THREE.OrthographicCamera();
+    const fit = () => { // 몸 뒤 끝부터 시야 앞 30 cm까지, 바닥 아래 조금
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      renderer.setSize(w, h, false);
+      const x0 = -120, x1 = 380, y0 = -15, spanX = x1 - x0, spanY = spanX * h / w;
+      Object.assign(view, { left: x0, right: x1, top: y0 + spanY, bottom: y0, near: -2000, far: 2000 });
+      view.updateProjectionMatrix();
+    };
+    // 오른쪽 옆에서 봄: 로봇 앞(+X)이 화면 오른쪽
+    const toWorld = () => { gl.scene.updateMatrixWorld(true); };
+    const lensLocal = () => dog.worldToLocal(cam.localToWorld(new THREE.Vector3(20.15, -24, 0))); // 렌즈 = bEye 앵커
+    const ray = (o, a, far = 420) => { // 아래로 a도인 광선이 바닥(Y=0)에 닿는 점, 지평선 위면 far 길이에서 자름
+      const r = a * Math.PI / 180, dx = Math.cos(r), dy = -Math.sin(r);
+      const t = dy < -1e-3 ? Math.min(-o.y / dy, far) : far;
+      return new THREE.Vector3(o.x + dx * t, o.y + dy * t, 60);
+    };
+    side = {
+      set(d, s) {
+        if (d == null) return;
+        cam.rotation.z = -d * Math.PI / 180;
+        toWorld();
+        const o = lensLocal(); o.z = 60;
+        const half = s.vfov / 2, near = ray(o, d + half), far = ray(o, d - half);
+        wedge.geometry.setFromPoints([o, near, far]);
+        edges.geometry.setFromPoints([o, near, o, far, o, ray(o, d)]);
+        target.geometry.setFromPoints([o, ray(o, (s.target[0] + s.target[1]) / 2)]);
+        target.computeLineDistances();
+        renderer.render(scene, view);
+      },
+    };
+    const look = () => { // 장면 전체를 +Z(로봇 오른쪽)에서 X-Y 평면으로 봄
+      const w = new THREE.Vector3(); dog.getWorldPosition(w);
+      view.position.copy(dog.localToWorld(new THREE.Vector3(0, 0, 1000)));
+      view.up.copy(dog.localToWorld(new THREE.Vector3(0, 1, 0)).sub(w));
+      view.lookAt(w);
+    };
+    toWorld(); fit(); look();
+    new ResizeObserver(() => { fit(); side.set(deg, cfg); }).observe(canvas);
+    $("side3d").textContent = "옆모습은 CAD 모델 기준이라 높이가 실물과 조금 다릅니다. 각도는 카메라 영상에서 잰 값입니다.";
+    if (deg != null) side.set(deg, cfg);
+  } catch (e) {
+    $("side3d").textContent = "3D 모델을 불러오지 못했습니다: " + e.message;
+  }
+})();
+</script>
+</body>
+</html>

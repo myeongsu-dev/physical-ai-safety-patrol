@@ -1,7 +1,7 @@
 // 비전 모듈(ESP32-S3, GC2145) 펌웨어 · 박명수
 // 하는 일
 //   1. 검은 선 찾기 (항상): MechDog 보드가 I2C(주소 0x53)로 읽는 Hiwonder 레지스터 형식 그대로 답한다.
-//      검정은 0xA8(화면 위 구역)·0xA9(가운데 구역), 7바이트 [ID 5, 중심x, 중심y, 좌상x, 좌상y, 우하x, 우하y].
+//      검정은 0xA8(화면 위 구역)·0xA9(가운데 구역, 못 찾으면 아래 구역), 7바이트. 0xB0은 세 구역 21바이트 [ID 5, 중심x, 중심y, 좌상x, 좌상y, 우하x, 우하y].
 //      좌표는 160x120 기준(가운데 x=80). 다른 레지스터는 0.
 //   2. 영상 보내기 (켤 때만): USB 시리얼로 JPEG를 이어 보낸다. 찾은 선 상자와 구역 경계를 그려서 보냄.
 // USB 시리얼 명령 (줄 단위): STREAM 1 / STREAM 0, THR <1~254> (검정 기준 밝기, 저장됨), INFO
@@ -29,12 +29,30 @@ static const int DATA_PINS[8] = {11, 9, 8, 10, 12, 18, 17, 16};  // Y2..Y9
 #define H 240
 #define SW 160
 #define SH 120
-#define BAND (SH / 3)  // 화면을 위·가운데·아래 3구역으로 나눔 (아래 구역은 안 씀, Hiwonder와 같음)
+#define BAND (SH / 3)  // 화면을 위·가운데·아래 3구역으로 나눔 (아래 구역부터 이어서 찾음)
 #define BLACK_ID 5
 #define COL_MIN 3      // 한 열에서 검정 칸이 이만큼 있어야 선 후보
 #define AREA_MIN 40    // 구역 안 검정 칸 합이 이보다 작으면 못 찾음
+#define CONTRAST_MIN 50  // 구역 안 가장 밝은·어두운 밝기 차이가 이보다 작으면 바닥뿐 (검은 테이프 약 120 vs 흰 바닥 약 250)
+// 구역에서 가장 어두운 값이 이보다 밝으면 테이프 없음. 집 바닥 2026-11-26: 테이프 6~22, 테이프 없는 그늘진 바닥 111~123
+// (T10: 테이프가 화면 밖으로 나간 뒤 그늘을 선으로 잡아 반대로 꺾음). 미션맵 조명에서 다시 볼 것
+#define DARK_MAX 90
+// 고른 검정 띠가 구역(160x40 = 6400칸)을 거의 다 덮으면 테이프가 아님 (렌즈가 가려졌거나 바닥 전체가 어두움 → 선 놓침으로 멈춤).
+// 각도 16~24°에서 곧은 테이프 약 870~2900칸, 가운데 구역을 가로지르는 직각 코너 약 2600~5000칸 (렌즈 실측 f 548 ·
+// 높이 3.7~4.1 cm로 계산). 코너를 버리지 않도록 크게 둠
+#define AREA_MAX 6000
+// 고른 검정 띠의 평균 밝기가 구역에서 가장 밝은 값의 이 비율(%)보다 밝으면 그림자 (테이프 20~39%, 그림자 62%:
+// T19 2026-11-26 그늘 속 바닥 이음매를 선으로 잡아 엉뚱한 쪽으로 감). 가장 어두운 값만 보면 이음매(81)가 DARK_MAX를 통과함
+#define DARK_RATIO 50
+// 아래 구역부터 이어서 찾기: 각 구역은 기준 x(아래 구역은 바로 전 장의 아래 구역, 가운데는 아래, 위는 가운데)에
+// 가장 가까운 띠를 고르고, 그 거리가 이보다 멀면 못 찾음. 화면에 다른 트랙이 같이 보여도 넘어가지 않게
+// (2026-11-26 36초 주행: 가장 굵은 띠를 고르다 돌던 중 옆 트랙을 잡음). 기준이 없으면 가장 굵은 띠
+#define JUMP_MAX 40
+#define NEAR_KEEP 15  // 아래 구역을 이만큼(장) 놓쳐도 마지막 위치를 기준으로 씀 (약 0.5초)
+#define TRIO_REG 0xB0  // 이 레지스터를 읽으면 위 · 가운데 · 아래 구역 7바이트씩 21바이트 (가운데는 아래로 바꾸기 전 값)
 
 static uint8_t regs[256][7];  // I2C 레지스터 (주소 → 7바이트)
+static uint8_t trio[21];      // TRIO_REG
 static portMUX_TYPE regLock = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint8_t reqReg = 0;
 
@@ -55,11 +73,12 @@ static void onReceive(int n) {
 }
 
 static void onRequest() {
-  uint8_t out[7];
+  uint8_t out[21];
+  int n = reqReg == TRIO_REG ? 21 : 7;
   portENTER_CRITICAL(&regLock);
-  memcpy(out, regs[reqReg], 7);
+  memcpy(out, n == 21 ? trio : regs[reqReg], n);
   portEXIT_CRITICAL(&regLock);
-  Wire.write(out, 7);
+  Wire.write(out, n);
 }
 
 // ---------- 검은 선 찾기 ----------
@@ -74,21 +93,36 @@ static inline uint8_t luma(uint16_t c) {
 }
 
 // 구역 하나에서 가장 굵은 검정 띠를 찾아 out[7]에 채움 (못 찾으면 0)
-static void findLine(const uint8_t *buf, int band, uint8_t out[7]) {
+// 검정 기준은 구역의 가장 어두운·밝은 밝기의 중간 (thr는 상한). 조명이 바뀌면 고정값으로는 바닥까지 검정이 됨
+// (2026-11-26 해 질 녘: 테이프 없는 바닥을 폭 전체로 잡아 x=79로 직진). 차이가 CONTRAST_MIN보다 작으면 바닥뿐 → 못 찾음
+static void findLine(const uint8_t *buf, int band, int ref, uint8_t out[7]) {
   uint8_t cnt[SW], top[SW], bot[SW];
+  uint16_t sv[SW];  // 열마다 검정 칸 밝기 합 (최대 40 x 255)
   int y0 = band * BAND, y1 = y0 + BAND;
-  for (int x = 0; x < SW; x++) {
-    cnt[x] = 0; top[x] = 255; bot[x] = 0;
+  uint8_t lo = 255, hi = 0;
+  for (int x = 0; x < SW; x++)
     for (int y = y0; y < y1; y++) {
-      if (luma(px(buf, x * 2, y * 2)) < thr) {
+      uint8_t v = luma(px(buf, x * 2, y * 2));
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+  memset(out, 0, 7);
+  if (hi - lo < CONTRAST_MIN || lo > DARK_MAX) return;
+  uint8_t t = min((int)thr, (lo + hi) / 2);
+  for (int x = 0; x < SW; x++) {
+    cnt[x] = 0; top[x] = 255; bot[x] = 0; sv[x] = 0;
+    for (int y = y0; y < y1; y++) {
+      uint8_t v = luma(px(buf, x * 2, y * 2));
+      if (v < t) {
         cnt[x]++;
+        sv[x] += v;
         if (y < top[x]) top[x] = y;
         bot[x] = y;
       }
     }
   }
-  // 후보 열이 이어진 구간 중 검정 칸 합이 가장 큰 것 (한 칸 끊김은 이어 봄)
-  int best = 0, bx1 = 0, bx2 = 0, x = 0;
+  // 후보 열이 이어진 구간(한 칸 끊김은 이어 봄) 중: 기준 x가 있으면 가운데가 가장 가까운 것, 없으면 검정 칸 합이 가장 큰 것
+  int best = 0, bx1 = 0, bx2 = 0, bd = 9999, x = 0;
   while (x < SW) {
     if (cnt[x] < COL_MIN) { x++; continue; }
     int s = x, sum = 0, gap = 0, e = x;
@@ -96,16 +130,20 @@ static void findLine(const uint8_t *buf, int band, uint8_t out[7]) {
       if (cnt[x] >= COL_MIN) { sum += cnt[x]; e = x; gap = 0; }
       else if (++gap > 1) break;
     }
-    if (sum > best) { best = sum; bx1 = s; bx2 = e; }
+    if (sum < AREA_MIN || sum > AREA_MAX) continue;
+    int d = ref < 0 ? -sum : abs((s + e) / 2 - ref);
+    if (d < bd) { bd = d; best = sum; bx1 = s; bx2 = e; }
   }
-  memset(out, 0, 7);
-  if (best < AREA_MIN) return;
+  if (!best || (ref >= 0 && bd > JUMP_MAX)) return;
   uint8_t ty = 255, by = 0;
+  uint32_t dsum = 0, dn = 0;
   for (int i = bx1; i <= bx2; i++) {
     if (cnt[i] < COL_MIN) continue;
     if (top[i] < ty) ty = top[i];
     if (bot[i] > by) by = bot[i];
+    dsum += sv[i]; dn += cnt[i];
   }
+  if (dsum * 100 > (uint32_t)hi * DARK_RATIO * dn) return;  // 평균이 밝은 바닥의 절반보다 밝음 → 그림자
   out[0] = BLACK_ID;
   out[1] = (bx1 + bx2) / 2;
   out[2] = (ty + by) / 2;
@@ -119,15 +157,31 @@ static void rect(uint16_t *img, int x1, int y1, int x2, int y2, uint16_t c) {
   for (int y = y1; y <= y2; y++) { img[y * W + x1] = c; img[y * W + x2] = c; }
 }
 
+// 위아래 줄을 맞바꿈. 이 카메라는 set_vflip이 듣지 않아 직접 뒤집음 (2026-11-26 실기: 로봇 앞이 화면 아래에 나왔음)
+static void flipRows(uint8_t *buf) {
+  uint8_t tmp[W * 2];
+  for (int y = 0; y < H / 2; y++) {
+    uint8_t *a = buf + y * W * 2, *b = buf + (H - 1 - y) * W * 2;
+    memcpy(tmp, a, W * 2); memcpy(a, b, W * 2); memcpy(b, tmp, W * 2);
+  }
+}
+
 static void detectTask(void *) {
   const uint16_t GREEN = 0xE007, GRAY = 0x1084;  // 큰 바이트 먼저 순서로 적은 RGB565
-  uint8_t a8[7], a9[7];
+  uint8_t a8[7], a9[7], aa[7];
+  int nearX = -1, nearMiss = 255;  // 바로 전까지 아래 구역 선 x, 놓친 장 수
   for (;;) {
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) { delay(10); continue; }
-    findLine(fb->buf, 0, a8);
-    findLine(fb->buf, 1, a9);
+    flipRows(fb->buf);  // 이제 화면 위 = 로봇에서 먼 쪽 (0xA8 = 먼 구역)
+    // 아래(발 바로 앞) → 가운데 → 위 순서로, 바로 아래 구역 위치에서 이어지는 띠만 (JUMP_MAX)
+    findLine(fb->buf, 2, nearMiss < NEAR_KEEP ? nearX : -1, aa);
+    if (aa[0]) { nearX = aa[1]; nearMiss = 0; } else if (nearMiss < 255) nearMiss++;
+    findLine(fb->buf, 1, aa[0] ? aa[1] : -1, a9);
+    findLine(fb->buf, 0, a9[0] ? a9[1] : aa[0] ? aa[1] : -1, a8);
     portENTER_CRITICAL(&regLock);
+    memcpy(trio, a8, 7); memcpy(trio + 7, a9, 7); memcpy(trio + 14, aa, 7);
+    if (!a9[0]) memcpy(a9, aa, 7);  // Hiwonder 형식(0xA9): 가운데에서 놓치면 아래 구역. 중심 y(80~119)로 구분
     memcpy(regs[0xA8], a8, 7);
     memcpy(regs[0xA9], a9, 7);
     portEXIT_CRITICAL(&regLock);
@@ -137,6 +191,7 @@ static void detectTask(void *) {
       for (int x = 0; x < W; x++) { shot[BAND * 2 * W + x] = GRAY; shot[BAND * 4 * W + x] = GRAY; }
       if (a8[0]) rect(shot, a8[3], a8[4], a8[5], a8[6], GREEN);
       if (a9[0]) rect(shot, a9[3], a9[4], a9[5], a9[6], GREEN);
+      if (aa[0]) rect(shot, aa[3], aa[4], aa[5], aa[6], GREEN);
       xSemaphoreGive(shotReady);
     }
     esp_camera_fb_return(fb);
@@ -172,9 +227,8 @@ static bool startCamera() {
   c.fb_location = CAMERA_FB_IN_PSRAM;
   c.grab_mode = CAMERA_GRAB_LATEST;
   if (esp_camera_init(&c) != ESP_OK) return false;
-  // 카메라가 거꾸로 달려 있어 화면이 180도 돌아가 있음 (위가 가까운 쪽, 좌우 반대 → 선 반대쪽으로 꺾었음). 바로 세움
+  // 좌우 뒤집기 (2026-11-26 실기로 좌우 맞음 확인). 상하는 detectTask의 flipRows가 맡음
   sensor_t *s = esp_camera_sensor_get();
-  s->set_vflip(s, 1);
   s->set_hmirror(s, 1);
   return true;
 }
