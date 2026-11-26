@@ -151,64 +151,80 @@ for _ in range(4):
 assert moves[-1] == (-50, 0)
 cmd("S"); sonar_cm[0] = 25.0
 # 선 따라가기: 선 x=80(가운데)이면 직진
+Cam.line = [bytes(7), bytes([5, 80, 60, 0, 0, 0, 0]), bytes([5, 80, 100, 0, 0, 0, 0])]
 cmd("F", 50, 25, 10000); dt.tick_motion(); assert moves[-1] == (50, 0)
 
 
-def follow(far, mid):
-    Cam.line = [bytes([5, far, 20, 0, 0, 0, 0]) if far >= 0 else bytes(7), bytes([5, mid, 60, 0, 0, 0, 0]) if mid >= 0 else bytes(7), bytes(7)]
+def follow(far, mid, near=-2):
+    """세 구역 선 x (-1은 없음). near를 안 주면 가운데와 같은 x"""
+    near = mid if near == -2 else near
+    Cam.line = [bytes([5, x, y, max(0, x - 12), y - 19, min(159, x + 12), y + 19]) if x >= 0 else bytes(7)
+                for x, y in ((far, 20), (mid, 60), (near, 100))]
     clock[0] += 20
     dt.tick_motion()
     return moves[-1]
-def fresh():  # 새로 출발 (기준 방향 · 쏠림 보정 0)
-    cmd("S"); cmd("F", 50, 25, 10000); dt.gyro["yaw"] = 0.0
-def run(far, mid, n=10):
+def fresh(amax=25):  # 새로 출발
+    cmd("S"); cmd("F", 50, amax, 10000); dt.gyro["yaw"] = 0.0
+def run(far, mid, near=-2, n=50):  # 한 걸음(0.7초)보다 길게
     for _ in range(n):
-        m = follow(far, mid)
-    return m[1]
-fresh(); assert run(80, 80) == 0                      # 가운데: 직진
-fresh(); assert run(100, 100) < 0                     # 선이 오른쪽: 오른쪽으로
-fresh(); assert run(60, 60) > 0                       # 왼쪽: 왼쪽으로
-fresh(); assert run(-1, 100) < 0 and run(100, -1) < 0  # 한 구역만 보여도
-fresh(); assert run(82, 95) < 0                       # T14 끝: 먼 쪽은 거의 가운데, 가까운 쪽이 오른쪽 → 오른쪽으로
-fresh(); a1 = run(85, 85, 5); a2 = run(85, 85, 60); assert a1 < 0 and a2 < a1  # 비켜난 채 머물면 쌓여서 더 꺾음
-fresh(); assert run(100, 100, 200) == -25             # 오래 비켜나 있으면 쌓여서 최대 각도에서 자름
-fresh(); run(80, 80, 40); m = follow(150, 150); assert m[0] == 50, m  # 한 장만 크게 비켜난 건 한 걸음 평균이라 바로 안 멈춤
-for _ in range(30):                                   # 0.6초쯤 계속 크게 비켜나면
-    m = follow(150, 150)
-assert m == (0, -dt.SEARCH_ANGLE), m                  # 크게(1.5 cm 넘게) 비켜나면 제자리에서 선 쪽으로
-for _ in range(40):
-    m = follow(82, 82)
-assert m[0] == 50, m                                  # 가운데로 돌아오면 바로 다시 걸음
-assert follow(-1, -1) == (50, -25)                    # 놓치면 잠깐(0.6초)은 걸으면서 마지막으로 본 쪽(오른쪽)으로 크게
-fresh(); run(60, 60); assert follow(-1, -1) == (50, 25)  # 왼쪽에서 놓치면 왼쪽
-for _ in range(40):                                   # 0.6초 넘게 안 보이면 제자리에서 그쪽으로 돌며 찾음
+        m = follow(far, mid, near)
+    return m
+fresh(); assert run(80, 80) == (50, 0)                # 가운데 · 곧은 선: 직진
+fresh(); assert run(100, 100)[1] < 0                  # 선이 오른쪽: 오른쪽으로
+fresh(); assert run(60, 60)[1] > 0                    # 왼쪽: 왼쪽으로
+fresh(); assert run(98, 90, 80)[1] < 0               # 곧은 선이 몸에 비스듬히 오른쪽으로 뻗음: 선 방향(오른쪽)으로 돎
+# 곡선: 아래 칸이 선 위, 몸은 같은 중심 원 (위 x는 그 기하로 계산한 값). 반지름 100 cm 오른쪽 → 걸으며 조향 약 -16
+fresh(); m = run(121, 98, 80); assert m[0] == 50 and -20 < m[1] < -10, m
+# 반지름 30 cm 오른쪽 (위 칸은 화면 밖): 필요한 도는 속도 약 15°/s → 최대 조향 40이면 걸으며 약 -35
+fresh(40); m = run(-1, 158, 80); assert m[0] == 50 and -40 <= m[1] <= -30, m
+fresh(40); m = run(-1, 2, 80); assert m[0] == 50 and 30 <= m[1] <= 40, m   # 왼쪽도 같게
+# 최대 조향 25(초당 약 9.5°)로는 못 도니 보폭 30 · 조향 40으로 돎, 곡선이 풀리면 다시 걸음
+fresh(25); assert run(-1, 158, 80) == (30, -40)
+assert run(80, 80)[0] == 50
+def edge_band(x1, x2):  # 위 구역 띠를 가로 범위로 (U자에서 옆으로 누운 테이프)
+    Cam.line[0] = bytes([5, (x1 + x2) // 2, 20, x1, 1, x2, 39]); clock[0] += 20; dt.tick_motion(); return moves[-1]
+# U자 들머리: 발 앞은 가운데인데 위 구역 띠가 화면 왼쪽 끝에 닿으면 놓치기 전에 왼쪽으로 제자리 돌기 (오른쪽도 같게)
+fresh(40); run(80, 80, 80, 20); assert edge_band(0, 93) == (30, 40)
+fresh(40); run(80, 80, 80, 20); assert edge_band(100, 159) == (30, -40)
+fresh(40); run(80, 80, 80, 20); assert edge_band(0, 159)[0] == 50     # 양쪽 끝에 다 닿는 띠는 가로지르는 선이라 방향 모름
+fresh(40); run(80, 140, 140, 20); assert edge_band(0, 60) != (30, 40)  # 발 앞 점이 반대쪽(오른쪽 약 2 cm)이면 왼쪽으로 안 돎
+fresh()                                               # 한 걸음마다 좌우로 흔들리는 선(머리 흔들림)은 평균 0이라 크게 안 꺾음
+for k in range(70):
+    m = follow(80 + (20 if (k // 9) % 2 else -20), 80 + (15 if (k // 9) % 2 else -15))
+assert abs(m[1]) <= 8, m
+# 어느 선인지는 아래 칸이 정함
+fresh(); run(80, 80, 80, 10); m = moves[-1]
+assert follow(80, 84, -1)[0] == 50                    # 아래 칸이 잠깐 빠져도 가운데 칸이 이어지면 계속 걸음
+for _ in range(50):                                   # 0.5초 넘게 아래 칸이 없으면 놓친 것 → 0.25초 뒤 제자리 찾기
+    m = follow(80, 84, -1)
+assert m == (0, dt.st["side"] * dt.SEARCH_ANGLE), m
+fresh(); run(80, 80, 80, 10)
+follow(80, 150, -1); assert dt.st["search"] is not None  # 아래 칸 없이 가운데 칸이 멀리 튀면(옆 줄일 수 있음) 놓친 것
+fresh(); m = moves[-1]; assert follow(80, -1, -1) == m  # 위 칸만 보이면 놓친 것: 잠깐(SEARCH_DELAY_MS)은 하던 대로
+for _ in range(15):
+    m = follow(30, -1, -1)
+assert m == (0, dt.SEARCH_ANGLE), m                   # 위 칸 선 쪽으로 걷지 않고 제자리에서 찾음 (side 기본 왼쪽)
+# 놓치면: 마지막으로 꺾던 쪽으로 제자리 돌기, 다시 잡는 선은 아래 · 가운데 칸에 찾는 쪽으로
+fresh(); run(100, 100)
+for _ in range(15):
     m = follow(-1, -1)
-assert m == (0, dt.SEARCH_ANGLE), m
-assert follow(70, 70)[0] == 50                        # 다시 보이면 바로 걷기
+assert m == (0, -dt.SEARCH_ANGLE), m                  # 오른쪽으로 꺾다 놓치면 오른쪽
+fresh(); run(60, 60)
+for _ in range(15):
+    m = follow(-1, -1)
+assert m == (0, dt.SEARCH_ANGLE), m                   # 왼쪽이면 왼쪽
+assert follow(40, -1, -1) == (0, dt.SEARCH_ANGLE)      # 위 칸에만 보이는 선은 옆 줄일 수 있어 계속 찾음
+assert follow(-1, 150, 150) == (0, dt.SEARCH_ANGLE)    # 찾는 쪽(왼쪽) 반대 끝에 보이는 선도 이미 지나친 줄
+assert follow(70, 70)[0] == 50                        # 찾는 쪽에 다시 보이면 바로 걷기
 fresh(); run(60, 60)
 dt.gyro["yaw"] = 0.0
 for _ in range(40):
     follow(-1, -1)
 dt.gyro["yaw"] = 95.0; sent.clear(); follow(-1, -1)  # 90° 넘게 돌아도 못 찾으면 멈추고 E lost
 assert dt.st["mode"] is None and moves[-1] == (0, 0) and any("|lost|" in x for x in sent), sent
-fresh(); assert run(85, 15) > 0                       # 곡선: 먼 점은 가운데여도 가까운 점이 왼쪽 끝이면 왼쪽으로 크게
-# 아래 구역만 보이면: 발 바로 앞이라 같은 칸이어도 cm로는 덜 비켜남 → 덜 꺾음
-fresh(); a_mid = run(-1, 60, 3)
-fresh()
-for _ in range(3):
-    Cam.line = [bytes(7), bytes(7), bytes([5, 60, 100, 0, 0, 0, 0])]
-    clock[0] += 20
-    dt.tick_motion()
-assert 0 < moves[-1][1] < a_mid and moves[-1][0] == 50, (moves[-1], a_mid)  # 선이 보이니 걷기는 계속
-assert dt.ch_line() == 60
-fresh(); run(80, 80, 20)
-for _ in range(10):                                   # 가운데여도 왼쪽으로 돌고 있으면(yaw가 늘면) 오른쪽으로 눌러 줌(자이로)
-    dt.gyro["yaw"] += 0.4; m = follow(80, 80)
-assert m[1] < 0, m
-fresh()                                               # 한 걸음마다 좌우로 흔들리는 선(머리 흔들림)은 평균 0이라 크게 안 꺾음
-for k in range(70):
-    m = follow(80 + (20 if (k // 9) % 2 else -20), 80 + (15 if (k // 9) % 2 else -15))
-assert abs(m[1]) <= 8, m
+# 조향 표 거꾸로: 도는 속도 → 조향
+assert dt.steer_for(0) == 0 and dt.steer_for(6.2) == 20 and dt.steer_for(-12.7) == -30 and dt.steer_for(99) == 40
+assert dt.interp(dt.SPEED_TABLE, 50) == (4.2 + 6.5) / 2
 Cam.line = [bytes(7), bytes([5, 80, 60, 70, 50, 90, 70]), bytes(7)]
 cmd("S")
 # 선 위치: 가운데 구역 먼저, 없으면 위 구역, 둘 다 없으면 -1
@@ -256,6 +272,7 @@ dt.stream()  # 끝나지 않으면 여기서 멈춤
 time.sleep_ms = lambda ms: None
 dt.st = old
 # 반복문에서 라이브러리 오류가 나도 반복문은 살아 있고 로봇은 멈춤
+Cam.line = [bytes(7), bytes([5, 80, 60, 0, 0, 0, 0]), bytes([5, 80, 100, 0, 0, 0, 0])]
 cmd("F", 50, 25, 5000)
 sent.clear(); boom[0] = 1
 one_loop(dt.main); assert dt.st["mode"] is None and moves[-1] == (0, 0) and sent[-1].startswith("CMD|!|loop|"), sent
@@ -266,7 +283,7 @@ for _ in range(50):
     clock[0] += 20
     dt.tick_yaw()
 assert abs(dt.gyro["yaw"]) < 1e-6, dt.gyro
-# 걷는 중에 F가 다시 오면(Pi가 시간을 늘림) 쌓인 보정을 지우지 않음
-fresh(); run(100, 100, 20); i0 = dt.st["i"]; cmd("F", 50, 25, 10000); assert dt.st["i"] == i0 != 0
+# 걷는 중에 F가 다시 오면(Pi가 시간을 늘림) 한 걸음 기록 · 꺾던 쪽을 지우지 않음
+fresh(); run(100, 100); w0 = list(dt.st["win"]); cmd("F", 50, 25, 10000); assert dt.st["win"] == w0 != [] and dt.st["side"] == -1
 cmd("S")
 print("sim_check ok")
