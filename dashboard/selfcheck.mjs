@@ -402,7 +402,11 @@ async function bootApp(search, tag, { login } = {}) {
   assert.equal(el("mode").textContent, "대피");
   assert.equal(el("evacuate").hidden, false);
   assert.equal(el("level").textContent, "화재");
-  assert.equal(el("count-heat").textContent, "2건"); // 로봇이 보낸 과열 + 불꽃 감지
+  // 요약 줄: 기본 화면은 경보 4칸만 (로봇 칸 없음). 로봇이 보낸 과열 + 불꽃 감지
+  assert.match(el("kpis").innerHTML, /<span class="kpi-label">과열<\/span><b>1<\/b>/);
+  assert.match(el("kpis").innerHTML, /<span class="kpi-label">불꽃 감지<\/span><b>1<\/b>/);
+  assert.match(el("kpis").innerHTML, /<span class="kpi-label">통로 차단<\/span><b>0<\/b>/);
+  assert.ok(!el("kpis").innerHTML.includes("순찰 중"));
   assert.match(el("alerts").innerHTML, /불꽃 감지/);
   assert.ok(!/>화재</.test(el("alerts").innerHTML), "경보 목록에 화재라고 쓰지 않음");
   globalThis.fake.tick();
@@ -435,19 +439,32 @@ async function bootApp(search, tag, { login } = {}) {
   assert.ok(svg.includes("비상구 1") && svg.includes("비상구 2") && svg.includes("충전 스테이션"));
   assert.ok(!/화재|통로 차단|밟힘/.test(svg));
   assert.match(el("time").textContent, /^\d\d:\d\d:\d\d$/);
-  // 기본 화면: 경보 상세 칸은 HTML에서 hidden 그대로, 최근 경보는 누를 수 없음
-  assert.equal(el("detail").innerHTML, "");
-  assert.ok(!el("alerts").innerHTML.includes("data-alert"));
-  assert.ok(!app.hasClick());
+  // 기본 화면: 새 경보에 팝업이 저절로 뜨지 않음. 최근 경보 · 요약 칸을 누르면 위치만 보이는 팝업 (사진 · 버튼 없음)
+  assert.equal(el("popup").hidden, true);
+  const firstId = el("alerts").innerHTML.match(/data-alert="(\d+)"/)[1];
+  await app.click({ alert: firstId });
+  assert.equal(el("popup").hidden, false);
+  assert.match(el("popup").innerHTML, /popup-body where-only/);
+  assert.match(el("popup").innerHTML, /mini-map/);
+  assert.ok(!/data-check|class="photo|<dl class="fields"/.test(el("popup").innerHTML), "사진 · 버튼 · 값 없음");
+  assert.match(el("popup").innerHTML, />닫기<\/button>/);
+  await app.click({ popupClose: "1" });
+  assert.equal(el("popup").hidden, true);
+  // 요약 칸: 과열이 여러 건이라 목록에서 골라 팝업 (기본 화면도 같음)
+  await app.click({ kpi: "heat" });
+  assert.equal(el("kpi-pick").hidden, false);
+  await app.click({ pick: el("kpi-pick").innerHTML.match(/data-pick="(\d+)"/)[1] });
+  assert.match(el("popup").innerHTML, /과열 경보/);
+  assert.ok(!el("popup").innerHTML.includes("data-check"));
+  await app.click({ popupClose: "1" });
   app.stop();
 }
 
-// ---------- 6) 관리자 화면: 경보 상세와 경보 해제 ----------
+// ---------- 6) 관리자 화면: 탭, 요약 줄, 눌러서 팝업으로 보고 경보 해제 ----------
 {
   const app = await bootApp("?fake&admin", "admin");
   const { el, fake } = app;
-  assert.equal(el("detail-panel").hidden, false);
-  assert.match(el("detail").innerHTML, /남은 경보가 없습니다/);
+  assert.match(el("alerts").innerHTML, /남은 경보가 없습니다/);
   // 로봇 현황 카드 4대
   assert.equal(el("robot-panel").hidden, false);
   assert.equal((el("robot-list").innerHTML.match(/<li /g) || []).length, 4);
@@ -455,53 +472,95 @@ async function bootApp(search, tag, { login } = {}) {
   // 로봇 카드 맨 아래 프로그램 버전 (가짜 로봇은 "fake")
   assert.equal((el("robot-list").innerHTML.match(/<div class="version">버전 fake<\/div>/g) || []).length, 4);
 
-  // 경보가 오면 가장 새 경보가 상세에 뜬다
+  // 탭: 처음은 실시간 관제, 기록 탭으로 바꿀 수 있음
+  assert.equal(el("tabs").hidden, false);
+  assert.equal(el("records-side").hidden, false);
+  assert.equal(el("shell").className, "shell has-tabs tab-live");
+  await app.click({ tab: "records" });
+  assert.equal(el("shell").className, "shell has-tabs tab-records");
+  await app.click({ tab: "live" });
+  assert.equal(el("shell").className, "shell has-tabs tab-live");
+
+  // 요약 줄: 로봇 3칸(4대를 나눠 담음) + 경보 4칸
+  const kpi = (label) => Number(el("kpis").innerHTML.match(new RegExp(`<span class="kpi-label">${label}</span><b>(\\d+)</b>`))[1]);
+  assert.equal(kpi("순찰 중") + kpi("충전 스테이션") + kpi("확인 필요"), 4);
+  assert.equal(kpi("충전 스테이션"), 2); // C · D는 처음에 충전 스테이션에서 대기
+  assert.equal(kpi("통로 차단"), 0);
+  assert.ok(!el("kpis").innerHTML.includes("data-kpi"), "0건이면 누를 수 없음");
+
+  // 경보 (화면을 연 직후라 저절로 뜨지 않음) → 요약 칸 · 실시간 관제 탭 숫자, 눌러서 팝업
   const ob = fake.emit("obstacle", "A");
   await tickWait();
-  let d = el("detail").innerHTML;
-  assert.match(d, /통로 차단/);
+  assert.equal(el("popup").hidden, true);
+  assert.equal(kpi("통로 차단"), 1);
+  assert.match(el("kpis").innerHTML, /class="kpi warn kpi-btn" data-kpi="obstacle"/);
+  assert.equal(el("tab-badge").textContent, 1);
+  assert.equal(el("tab-badge").hidden, false);
+  await app.click({ kpi: "obstacle" });
+  let d = el("popup").innerHTML;
+  assert.equal(el("popup").hidden, false);
+  assert.match(d, /통로 차단 경보/);
   assert.match(d, /사진 없음/); // 가짜 로봇은 사진이 없다
   assert.match(d, new RegExp(`data-check="${ob.id}"`));
   assert.match(d, /<dt>사람<\/dt>/);
-  assert.match(el("alerts").innerHTML, new RegExp(`data-alert="${ob.id}"`));
+  assert.match(d, /<dt>로봇<\/dt><dd>MD-1<\/dd>/);
+  assert.match(d, /닫기 \(위 요약 칸이나 최근 경보를 누르면 다시 볼 수 있음\)/);
+  await app.click({ popupClose: "1" });
+  assert.equal(el("popup").hidden, true);
 
-  // 다른 경보가 와도, 고른 경보가 상세에 남는다
+  // 최근 경보를 눌러도 팝업. 과열은 온도, 신뢰도는 안 보여 줌
   const heat = fake.emit("heat", "B");
   await tickWait();
-  assert.match(el("detail").innerHTML, new RegExp(`data-check="${heat.id}"`)); // 고른 게 없으면 새것
-  await app.click({ alert: String(ob.id) });
-  assert.match(el("detail").innerHTML, new RegExp(`data-check="${ob.id}"`));
-  assert.match(el("alerts").innerHTML, /class="selected"/);
-
-  // 경보 해제 → 서버에 보내고 목록에서 빠짐
-  await app.click({ check: String(ob.id) });
+  await app.click({ alert: String(heat.id) });
+  d = el("popup").innerHTML;
+  assert.match(d, /과열 경보/);
+  assert.match(d, /<dt>온도<\/dt>/);
+  assert.ok(!d.includes("신뢰도"));
+  // 경보 해제 → 서버에 보내고, 눌러서 연 팝업도 닫히고, 목록에서 빠짐
+  await app.click({ check: String(heat.id) });
   await tickWait();
-  assert.equal(fake.events.find((e) => e.id === ob.id).checked, true);
-  assert.ok(!el("alerts").innerHTML.includes(`data-alert="${ob.id}"`));
-  assert.match(el("detail").innerHTML, new RegExp(`data-check="${heat.id}"`)); // 남은 경보로 넘어감
-  assert.match(el("detail").innerHTML, /<dt>온도<\/dt>/);
-  assert.ok(!el("detail").innerHTML.includes("신뢰도")); // 과열은 온도로 판단해서 신뢰도를 안 보여 줌
+  assert.equal(fake.events.find((e) => e.id === heat.id).checked, true);
+  assert.equal(el("popup").hidden, true);
+  assert.ok(!el("alerts").innerHTML.includes(`data-alert="${heat.id}"`));
+
+  // 같은 종류가 여러 건이면 칸 아래 목록에서 골라 팝업. 오탐으로 해제해도 닫힘
+  const ob2 = fake.emit("obstacle", "B");
+  await tickWait();
+  await app.click({ kpi: "obstacle" });
+  assert.equal(el("popup").hidden, true);
+  assert.equal(el("kpi-pick").hidden, false);
+  assert.match(el("kpi-pick").innerHTML, /통로 차단 2건/);
+  assert.match(el("kpi-pick").innerHTML, new RegExp(`data-pick="${ob.id}"`));
+  await app.click({ pick: String(ob2.id) });
+  assert.equal(el("kpi-pick").hidden, true);
+  assert.match(el("popup").innerHTML, new RegExp(`data-check="${ob2.id}"`));
+  await app.click({ check: String(ob2.id), falseAlarm: "1" });
+  await tickWait();
+  assert.equal(fake.events.find((e) => e.id === ob2.id).false_alarm, true);
+  assert.equal(el("popup").hidden, true);
 
   // 불꽃 감지: 다른 경보처럼 바로 해제. 화재가 아니라서 대피 모드도 안 됨
   const flame = fake.emit("flame", "C");
   await tickWait();
-  assert.match(el("detail").innerHTML, /불꽃 감지/);
+  await app.click({ kpi: "flame" });
+  assert.match(el("popup").innerHTML, /불꽃 감지 경보/);
   assert.equal(el("evacuate").hidden, true);
   await app.click({ check: String(flame.id) });
   await tickWait();
   assert.equal(fake.events.find((e) => e.id === flame.id).checked, true);
 
-  // 경보 해제를 못 보내면 알려 준다 (없는 경보 번호 → 404)
-  const heatId = heat.id;
-  fake.events.find((e) => e.id === heatId).id = 9999; // 서버 쪽에서만 번호가 바뀐 것처럼
-  await app.click({ check: String(heatId) });
+  // 경보 해제를 못 보내면 팝업에 알려 준다 (없는 경보 번호 → 404)
+  const obId = ob.id;
+  fake.events.find((e) => e.id === obId).id = 9999; // 서버 쪽에서만 번호가 바뀐 것처럼
+  await app.click({ alert: String(obId) });
+  await app.click({ check: String(obId) });
   await tickWait();
-  assert.match(el("detail").innerHTML, /경보 해제를 보내지 못했습니다 \(서버 응답 404\)/);
+  assert.match(el("popup").innerHTML, /경보 해제를 보내지 못했습니다 \(서버 응답 404\)/);
+  await app.click({ popupClose: "1" });
 
   // 지도에 로봇 위치 (화면 이름으로)
   assert.equal((el("map .robots").innerHTML.match(/class="robot"/g) || []).length, 4);
   assert.ok(el("map .robots").innerHTML.includes(">MD-1</text>"));
-  assert.match(el("detail").innerHTML, /<dt>로봇<\/dt><dd>MD-\d<\/dd>/);
   app.stop();
 }
 
@@ -527,13 +586,14 @@ class FakeAudioContext {
   assert.equal(a.play("evacuate"), 3);
   assert.equal(a.play("obstacle"), 2);
   assert.equal(a.play("heat"), 1);
-  assert.equal(a.play("flame"), 1);
+  assert.equal(a.play("flame"), 2); // 불꽃 감지는 과열보다 높게 2번
+  assert.equal(a.play("floor_object"), 1);
   a.disable();
   assert.equal(a.play("evacuate"), 0);
   assert.equal(createAlarm(undefined).supported, false);
 }
 
-// ---------- 8) 관리자 화면: 경보 팝업, 깜빡임, 경보음 ----------
+// ---------- 8) 관리자 화면: 경보 팝업 (4종 모두), 경보음 ----------
 {
   globalThis.AudioContext = FakeAudioContext;
   const app = await bootApp("?fake&admin", "popup");
@@ -556,40 +616,54 @@ class FakeAudioContext {
   assert.match(el("popup").innerHTML, new RegExp(`data-check="${ob.id}"`));
   assert.equal(beeps, 2);
 
-  // 과열 → 팝업 없이 깜빡임 + 경보음 1번. 팝업은 통로 차단 그대로
-  const heat = fake.emit("heat", "B");
+  // 과열 → 경보음 1번, 팝업은 통로 차단 다음으로 대기
+  fake.emit("heat", "B");
   await tickWait();
   assert.equal(beeps, 3);
   assert.match(el("popup").innerHTML, /통로 차단 경보/);
-  assert.match(el("alerts").innerHTML, new RegExp(`class="[^"]*blink[^"]*"><button type="button" class="alert-btn" data-alert="${heat.id}"`));
-
-  // 팝업 닫기 → 오른쪽 경보 상세에 그 경보
+  assert.match(el("popup").innerHTML, /대기 중인 팝업 1건/);
+  await app.click({ popupClose: "1" });
+  assert.match(el("popup").innerHTML, /과열 경보/);
   await app.click({ popupClose: "1" });
   assert.equal(el("popup").hidden, true);
-  assert.match(el("detail").innerHTML, new RegExp(`data-check="${ob.id}"`));
 
-  // 과열을 눌러 보면 깜빡임이 멈춘다
-  await app.click({ alert: String(heat.id) });
-  assert.ok(!el("alerts").innerHTML.includes("blink"));
-
-  // 불꽃 감지 → 팝업 없이 깜빡임 + 경보음 1번. 화재가 아님
-  const flame = fake.emit("flame", "C");
+  // 불꽃 감지 → 팝업 + 높은 경보음 2번. 화재가 아님
+  fake.emit("flame", "C");
   await tickWait();
-  assert.equal(beeps, 4);
-  assert.equal(el("popup").hidden, true);
+  assert.equal(beeps, 5);
+  assert.match(el("popup").innerHTML, /불꽃 감지 경보/);
   assert.equal(el("evacuate").hidden, true);
-  assert.match(el("alerts").innerHTML, new RegExp(`class="[^"]*blink[^"]*"><button type="button" class="alert-btn" data-alert="${flame.id}"`));
+  await app.click({ popupClose: "1" });
 
-  // 화재 확정(서버가 대피 모드로 바꿈) → 경보음 3번, 대피 띠에 "경보음 멈춤"
+  // 밟힘 주의 → 팝업 + 경보음 1번
+  fake.emit("floor_object", "D");
+  await tickWait();
+  assert.equal(beeps, 6);
+  assert.match(el("popup").innerHTML, /밟힘 주의 경보/);
+  await app.click({ popupClose: "1" });
+  assert.ok(!el("alerts").innerHTML.includes("blink"), "깜빡임 없음");
+
+  // 기록 탭을 보고 있어도 팝업 · 경보음
+  await app.click({ tab: "records" });
+  fake.emit("obstacle", "B");
+  await tickWait();
+  assert.equal(beeps, 8);
+  assert.match(el("popup").innerHTML, /통로 차단 경보/);
+  await app.click({ popupClose: "1" });
+  await app.click({ tab: "live" });
+
+  // 화재 확정(서버가 대피 모드로 바꿈) → 과열 1 + 불꽃 감지 2 + 대피 3, 대피 띠에 "경보음 멈춤"
   beeps = 0;
   fake.fire("D");
   await tickWait();
-  assert.equal(beeps, 1 + 1 + 3); // 과열, 불꽃 감지, 대피
+  assert.equal(beeps, 1 + 2 + 3);
   assert.equal(el("evacuate").hidden, false);
-  assert.equal(el("popup").hidden, true);
   assert.match(el("evacuate-actions").innerHTML, /data-evac-mute="1"/);
   await app.click({ evacMute: "1" });
   assert.ok(!el("evacuate-actions").innerHTML.includes("data-evac-mute"));
+  await app.click({ popupClose: "1" });
+  await app.click({ popupClose: "1" });
+  assert.equal(el("popup").hidden, true);
   await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
   await tickWait();
 
@@ -601,6 +675,7 @@ class FakeAudioContext {
   await app.click({ popupClose: "1" });
   assert.match(el("popup").innerHTML, /통로 차단 경보/);
   assert.ok(!el("popup").innerHTML.includes("대기 중인 팝업"));
+  await app.click({ popupClose: "1" });
 
   // 경보음 끄기 → 소리 안 남
   await app.click({ sound: "1" });
@@ -654,7 +729,7 @@ class FakeAudioContext {
   await app.click({ viewerClose: "1" });
   assert.equal(el("viewer").hidden, true);
 
-  // 경보 이력: 해제한 경보도 남고, 눌러 보면 상세에 버튼 없이 "경보 해제"
+  // 경보 이력: 해제한 경보도 남고, 눌러 보면 팝업에 버튼 없이 "경보 해제"
   assert.match(el("history").innerHTML, new RegExp(`data-alert="${fire.id}"`));
   assert.match(el("history").innerHTML, /해제 전/);
   assert.match(el("history").innerHTML, /A 경로/);
@@ -663,10 +738,11 @@ class FakeAudioContext {
   assert.match(el("history").innerHTML, /<td class="state done">경보 해제 <span>\d\d:\d\d:\d\d<\/span><\/td>/);
   assert.ok(!el("alerts").innerHTML.includes(`data-alert="${fire.id}"`)); // 최근 경보에서는 빠짐
   await app.click({ alert: String(fire.id) });
-  const d = el("detail").innerHTML;
+  const d = el("popup").innerHTML;
   assert.match(d, /<p class="done-text">경보 해제<\/p>/);
   assert.ok(!d.includes("data-check"));
   assert.match(d, /<dt>경로<\/dt><dd>A 경로<\/dd>/);
+  await app.click({ popupClose: "1" });
   app.stop();
 }
 
@@ -736,12 +812,13 @@ class FakeAudioContext {
   fake.adminPassword = "5678";
   const ob2 = fake.emit("obstacle", "B");
   await tickWait();
+  await app.click({ alert: String(ob2.id) });
   await app.click({ check: String(ob2.id) });
   await tickWait();
   assert.equal(fake.events.find((x) => x.id === ob2.id).checked, false);
   assert.equal(el("login").hidden, false);
   assert.match(el("login-error").textContent, /바뀌었습니다/);
-  assert.match(el("detail").innerHTML, /관리자 비밀번호가 맞지 않음/);
+  assert.match(el("popup").innerHTML, /관리자 비밀번호가 맞지 않음/);
   await submit(el, "5678");
   await tickWait();
   assert.equal(el("login").hidden, true);
@@ -771,13 +848,13 @@ class FakeAudioContext {
   assert.equal((await (await post(a2.id, { false_alarm: true })).json()).false_alarm, true);
   assert.equal((await (await post(a1.id, { false_alarm: true })).json()).false_alarm, false, "이미 닫힌 건 그대로");
 
-  // 화면: 경보 상세에 경보 해제 · 오탐 두 버튼, 오탐을 누르면 서버에 오탐으로 기록되고 이력에 "오탐으로 해제"
+  // 화면: 팝업에 경보 해제 · 오탐 두 버튼, 오탐을 누르면 서버에 오탐으로 기록되고 이력에 "오탐으로 해제"
   const app = await bootApp("?fake&admin", "false-alarm");
   const { el, fake } = app;
   const ob = fake.emit("obstacle", "C");
   await tickWait();
   await app.click({ alert: String(ob.id) });
-  const d = el("detail").innerHTML;
+  const d = el("popup").innerHTML;
   assert.match(d, new RegExp(`data-check="${ob.id}">경보 해제</button>`));
   assert.match(d, new RegExp(`data-check="${ob.id}" data-false-alarm="1">오탐</button>`));
   await app.click({ check: String(ob.id), falseAlarm: "1" });
@@ -787,7 +864,8 @@ class FakeAudioContext {
   assert.equal(sent.false_alarm, true);
   assert.match(el("history").innerHTML, /<td class="state done false-alarm">오탐으로 해제 <span>\d\d:\d\d:\d\d<\/span><\/td>/);
   await app.click({ alert: String(ob.id) });
-  assert.match(el("detail").innerHTML, /<p class="done-text">오탐으로 해제<\/p>/);
+  assert.match(el("popup").innerHTML, /<p class="done-text">오탐으로 해제<\/p>/);
+  await app.click({ popupClose: "1" });
   // 정탐은 그대로 "경보 해제"
   const ob2 = fake.emit("floor_object", "D");
   await tickWait();
@@ -846,7 +924,7 @@ class FakeAudioContext {
   const { el, fake } = app;
   await tickWait(20);
   assert.equal(el("history-sub").textContent, "서버에 기록된 경보, 최근 것부터");
-  const rowsShown = () => (el("history").innerHTML.match(/<tr /g) || []).length;
+  const rowsShown = () => (el("history").innerHTML.match(/<tr>/g) || []).length;
   const want = fake.events.filter((e) => e.type !== "helmet").length;
   assert.equal(rowsShown(), Math.min(50, want));
   assert.equal(el("stats-panel").hidden, false);
@@ -873,11 +951,11 @@ class FakeAudioContext {
     await app2.click({ pastRetry: "1" }); // 다시 받기와 같은 길로 첫 쪽을 다시 받음
     await tickWait(20);
     const n = f2.events.filter((e) => e.type !== "helmet").length;
-    assert.equal((app2.el("history").innerHTML.match(/<tr /g) || []).length, 50);
+    assert.equal((app2.el("history").innerHTML.match(/<tr>/g) || []).length, 50);
     assert.match(app2.el("history-more").innerHTML, /data-more="1">더 보기/);
     await app2.click({ more: "1" });
     await tickWait(20);
-    assert.equal((app2.el("history").innerHTML.match(/<tr /g) || []).length, Math.min(100, n));
+    assert.equal((app2.el("history").innerHTML.match(/<tr>/g) || []).length, Math.min(100, n));
     app2.stop();
   }
 
