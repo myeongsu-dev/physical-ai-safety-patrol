@@ -976,6 +976,10 @@ class FakeAudioContext {
 // ---------- 길 중간에 멈춘 로봇 (이슈 #22) ----------
 {
   assert.equal(robotStop({ status: "idle", marker: 15 }), null, "충전 스테이션에서 쉬는 건 멈춤 아님");
+  assert.equal(robotStop({ status: "idle", marker: 15, hold: null }), null);
+  assert.deepEqual(robotStop({ status: "idle", marker: 15, hold: "stop" }), { hold: "stop", reason: "관리자 정지" },
+    "충전 스테이션이어도 hold가 있으면 멈춤 (서버가 자동 출발시키지 않음)");
+  assert.equal(robotStop({ status: "guide", marker: 7, hold: "guide" }), null, "대피 안내는 따로 있음");
   assert.equal(robotStop({ status: "patrol", marker: 7 }), null);
   assert.equal(robotStop({ status: "blocked", marker: 7 }), null, "막힘 정지는 따로 있음");
   assert.equal(robotStop({ status: "idle", marker: null }), null);
@@ -1016,6 +1020,23 @@ class FakeAudioContext {
   await tickWait();
   assert.ok(!/멈춤/.test(card()));
   assert.ok(!el("map .robots").innerHTML.includes("#ff9f1a"));
+
+  // 충전 스테이션에 있어도 hold가 있으면 멈춤 (서버가 자동 출발시키지 않음), 요약 줄은 "확인 필요"로
+  const kpiN = (label) => Number(el("kpis").innerHTML.match(new RegExp(`<span class="kpi-label">${label}</span><b>(\\d+)</b>`))[1]);
+  const cardD = () => el("robot-list").innerHTML.split("<li").find((x) => x.includes(">MD-4<"));
+  const dockBefore = kpiN("충전 스테이션");
+  const checkBefore = kpiN("확인 필요");
+  fake.halt("D", "stop");
+  await tickWait();
+  assert.match(cardD(), /<span class="state">멈춤<\/span>/);
+  assert.match(cardD(), /관리자 정지/);
+  assert.match(cardD(), /충전 스테이션/);
+  assert.equal(kpiN("충전 스테이션"), dockBefore - 1);
+  assert.equal(kpiN("확인 필요"), checkBefore + 1);
+  fake.resume("D");
+  await tickWait();
+  assert.ok(!/멈춤/.test(cardD()), "hold가 풀리면 다시 대기");
+  assert.equal(kpiN("충전 스테이션"), dockBefore);
   app.stop();
 }
 

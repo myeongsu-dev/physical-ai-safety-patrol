@@ -201,9 +201,11 @@ export function evacView(store) {
   return store.mode === "evacuate" ? store.evac : null;
 }
 
-// 길 중간에 멈춘 로봇 (이슈 #22). state에 멈춘 이유가 아직 없어서, 충전 스테이션이 아닌 곳에서 "대기"면 멈춤으로 본다.
-// 충전 스테이션에서 쉬는 로봇과 통로 한가운데 선 로봇을 구분하려는 것. 안전 현황 단계는 올리지 않는다.
-// 엣지가 state에 hold(edge/agent.py의 멈춘 이유)를 실어 보내면 reason에 넣는다. 없으면 null (현장 확인 필요)
+// 멈춘 로봇 (이슈 #22). "대기"(idle)인데 다음 중 하나면 멈춤으로 본다. 안전 현황 단계는 올리지 않는다.
+//   - state에 hold(멈춘 이유, edge/agent.py)가 있음: 어디에 있든. 서버는 hold가 있는 로봇을 자동 출발시키지 않으므로
+//     충전 스테이션에 있어도 저절로 나가지 않는다 (server/fleet.py)
+//   - 충전 스테이션이 아닌 곳에 있음: hold가 없거나 null이어도 (예전 Pi는 hold를 안 보냄)
+// reason: hold를 화면 말로. hold가 없으면 null (화면은 "현장 확인 필요")
 export const HOLD_TEXT = {
   wait: "교차 확인 대기",
   stop: "관리자 정지",
@@ -218,8 +220,10 @@ export const HOLD_TEXT = {
   exit: "Pi 프로그램 꺼짐",
 };
 export function robotStop(msg) {
-  if (!msg || msg.status !== "idle" || msg.marker == null || msg.marker === DOCK_MARKER) return null;
+  if (!msg || msg.status !== "idle") return null;
   const hold = typeof msg.hold === "string" && msg.hold ? msg.hold : null;
+  const offDock = msg.marker != null && msg.marker !== DOCK_MARKER;
+  if (!hold && !offDock) return null;
   return { hold, reason: hold ? HOLD_TEXT[hold] ?? hold : null };
 }
 

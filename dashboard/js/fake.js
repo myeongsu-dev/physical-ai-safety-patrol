@@ -116,7 +116,7 @@ class FakeRobot {
     this.before = null;     // 대피 모드 전 상태
     this.sonar = 120;
     this.temp = 24;
-    this.hold = null;       // 멈춘 이유 (halt로 줄 때만 state에 실음. 진짜 엣지는 아직 안 보냄, 이슈 #22)
+    this.hold = null;       // 멈춘 이유 (stop · wait · line ...), 없으면 null
   }
 
   state() {
@@ -128,7 +128,7 @@ class FakeRobot {
       sonar_cm: Math.round(this.sonar * 10) / 10,
       temp_c: Math.round(this.temp * 10) / 10,
       version: "fake",
-      ...(this.hold ? { hold: this.hold } : {}),
+      hold: this.hold, // 멈춘 이유, 없으면 null (server/fake_robots.py · edge/agent.py와 같게)
     };
   }
 
@@ -140,9 +140,9 @@ class FakeRobot {
   }
 
   resume() {
-    if (this.status !== "idle" || this.marker === DOCK_MARKER || !this.role) return;
-    this.status = "patrol";
+    if (this.status !== "idle") return;
     this.hold = null;
+    if (this.marker !== DOCK_MARKER && this.role) this.status = "patrol";
   }
 
   // 1초. 내보낼 경보 종류(없으면 null)
