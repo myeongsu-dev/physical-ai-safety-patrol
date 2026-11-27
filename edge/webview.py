@@ -15,11 +15,6 @@
 import collections
 import json
 import logging
-import os
-import shutil
-import socket
-import subprocess
-import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +22,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from edge import config
+from edge.health import SysStats
 
 log = logging.getLogger("edge.web")
 
@@ -58,92 +54,6 @@ class LogRing(logging.Handler):
         with self._lk:
             return [{"n": n, "level": lv, "msg": m} for n, lv, m in self.lines if n > after]
 
-
-# ---------- Pi 상태 (/proc · /sys, 없으면 None) ----------
-def _read(path):
-    try:
-        return Path(path).read_text().strip()
-    except Exception:
-        return None
-
-
-class SysStats:
-    def __init__(self):
-        self._cpu_prev = None
-        self._throttle = (0.0, None)
-        self._ips = (0.0, None)
-
-    def cpu_pct(self):
-        s = _read("/proc/stat")
-        if not s:
-            return None
-        v = [int(x) for x in s.splitlines()[0].split()[1:]]
-        idle, total = v[3] + (v[4] if len(v) > 4 else 0), sum(v)
-        prev, self._cpu_prev = self._cpu_prev, (idle, total)
-        if prev is None or total == prev[1]:
-            return None
-        return round(100.0 * (1 - (idle - prev[0]) / (total - prev[1])), 1)
-
-    @staticmethod
-    def cpu_temp():
-        t = _read("/sys/class/thermal/thermal_zone0/temp")
-        return round(int(t) / 1000, 1) if t and t.isdigit() else None
-
-    @staticmethod
-    def mem():
-        s = _read("/proc/meminfo")
-        if not s:
-            return None
-        kv = {ln.split(":")[0]: int(ln.split()[1]) for ln in s.splitlines() if len(ln.split()) >= 2}
-        total, avail = kv.get("MemTotal"), kv.get("MemAvailable")
-        if not total or avail is None:
-            return None
-        return {"used_mb": (total - avail) // 1024, "total_mb": total // 1024, "pct": round(100 * (total - avail) / total, 1)}
-
-    def throttled(self):
-        """vcgencmd get_throttled → 저전압·과열 제한 (5초마다만 물음)"""
-        now = time.monotonic()
-        if now - self._throttle[0] < 5:
-            return self._throttle[1]
-        val = None
-        try:
-            r = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True, text=True, timeout=1)
-            bits = int(r.stdout.strip().split("=")[1], 16)
-            val = {"raw": hex(bits), "undervolt_now": bool(bits & 0x1), "throttled_now": bool(bits & 0x4),
-                   "undervolt_seen": bool(bits & 0x10000), "throttled_seen": bool(bits & 0x40000)}
-        except Exception:
-            pass
-        self._throttle = (now, val)
-        return val
-
-    def ips(self):
-        now = time.monotonic()
-        if now - self._ips[0] < 30:
-            return self._ips[1]
-        val = None
-        try:
-            r = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=1)
-            val = r.stdout.split() or None
-        except Exception:
-            pass
-        self._ips = (now, val)
-        return val
-
-    def snapshot(self):
-        up = _read("/proc/uptime")
-        try:
-            load = [round(x, 2) for x in os.getloadavg()]
-        except (OSError, AttributeError):
-            load = None
-        try:
-            du = shutil.disk_usage(str(config.ROOT))
-            disk = {"free_gb": round(du.free / 1e9, 1), "total_gb": round(du.total / 1e9, 1),
-                    "pct": round(100 * du.used / du.total, 1)}
-        except Exception:
-            disk = None
-        return {"host": socket.gethostname(), "ips": self.ips(), "platform": sys.platform,
-                "uptime_s": int(float(up.split()[0])) if up else None, "load": load, "cpu_pct": self.cpu_pct(),
-                "cpu_temp_c": self.cpu_temp(), "mem": self.mem(), "disk": disk, "throttled": self.throttled()}
 
 
 # ---------- agent 상태 ----------

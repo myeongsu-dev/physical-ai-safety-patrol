@@ -14,6 +14,7 @@
 | `hwcheck.py` | 장치 하나씩 확인 (포트, 보드, 선 위치, 짧은 주행, 카메라, 온도, 추론 속도, MQTT, 브로커 + 가짜 보드 흐름) |
 | `PATROL.md` | 서버 → Pi → MechDog 순찰 통신·선 따라가기 시험 순서, Pi 설치, 서버 명령 보내기 |
 | `selfcheck.py` | 장치 없이 판단 흐름 시험 → `edge ok` |
+| `health.py` | state의 `health`: 보드 · 카메라 · 모델 · 온도 센서 `ok`, Pi CPU 온도 · 사용률 · 메모리 · 저전압, 디버그 화면 주소 (#54). 매초 state에 같이 실어 대시보드로 감 |
 | `webview.py` · `webview.html` | 디버그 웹 화면 (agent 안에서 같이 뜸, 읽기 전용): 머리 카메라 영상 + 인식 상자, 판단·보드·MQTT 상태, Pi CPU 온도·사용률·메모리·저전압, 최근 기록. 브라우저로 `http://<Pi IP>:8080` (`WEB_PORT`, `--web 0`이면 끔) |
 | `xiao_cam/xiao_cam.ino` | XIAO ESP32-S3 Sense에 올리는 카메라 프로그램 (JPEG를 USB 시리얼로) |
 | `potent-edge.service` | Pi가 켜지면 자동 실행 (systemd) |

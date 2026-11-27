@@ -140,7 +140,7 @@ def check_agent(spool):
     run(ag, clock, 1.2)
     assert ag.status == "patrol" and ("F", config.PATROL_STRIDE, config.PATROL_ANGLE, config.MOVE_MS) in dog.sent
     assert states[-1]["battery"] == 50 and states[-1]["sonar_cm"] == 50.0 and states[-1]["version"] == "test"
-    assert set(states[-1]) == {"marker", "status", "role", "battery", "sonar_cm", "temp_c", "version", "hold"}
+    assert set(states[-1]) == {"marker", "status", "role", "battery", "sonar_cm", "temp_c", "version", "hold", "health"}
 
     # 마커: 새 마커를 읽으면 1초를 기다리지 않고 state를 바로 보냄. 같은 마커가 다시 와도 더 보내지 않음
     run(ag, clock, 0.5)
@@ -586,6 +586,53 @@ def check_server(spool):
     assert ag.status == "patrol" and ag.hold is None
 
 
+def check_health(spool):
+    """state의 health (#54): 매초 같이 감, ok는 Pi가 판단, 주소는 http://로 시작하는 전체 주소, JSON으로 보낼 수 있음"""
+    ag, dog, th, clock, events, states = make(spool)
+    run(ag, clock, 1.5)
+    h = states[-1]["health"]
+    assert set(h) == {"board", "cam", "model", "thermo", "pi", "web", "floor_web"}, h
+    assert h["board"]["ok"] is True and h["board"]["version"] and h["board"]["age_s"] <= config.BOARD_OK_S
+    assert h["cam"]["ok"] is True and h["thermo"]["ok"] is True and h["model"]["ready"] is False
+    assert set(h["pi"]) == {"cpu_temp_c", "cpu_pct", "mem_pct", "undervolt", "throttled"}
+    assert h["web"] is None or h["web"].startswith("http://"), h["web"]
+    assert protocol.unpack(protocol.pack(states[-1]))["health"] == h   # MQTT로 그대로 감
+    assert all("health" in s for s in states), "매초 state마다 health"
+
+    # 보드가 끊기면 board.ok False (측정값이 BOARD_OK_S 넘게 안 와도)
+    dog.disconnect()
+    run(ag, clock, 1.2)
+    assert states[-1]["health"]["board"]["ok"] is False
+    dog.reconnect()
+    run(ag, clock, 1.2)
+    assert states[-1]["health"]["board"]["ok"] is True
+    dog.mute = True
+    run(ag, clock, config.BOARD_OK_S + 1.2)
+    assert states[-1]["health"]["board"]["ok"] is False
+    dog.mute = False
+
+    # 카메라 장이 CAM_OK_S 넘게 안 오면 cam.ok False, 온도 센서를 못 읽으면 thermo.ok False
+    old = ag.cam.latest
+    ag.cam.latest = lambda max_age=1.0: Frame(clock() - config.CAM_OK_S - 1, jpeg=SOI + EOI)
+    th.read = lambda: setattr(th, "last", None)
+    run(ag, clock, 1.2)
+    h = states[-1]["health"]
+    assert h["cam"]["ok"] is False and h["cam"]["age_s"] > config.CAM_OK_S and h["thermo"]["ok"] is False
+    ag.cam.latest = old
+
+    # 주소: 디버그 화면은 WEB_PORT, 바닥 비전 모듈 화면은 8090이 켜져 있을 때만
+    from edge.health import Health
+    hl = Health(ag, web_port=8080, floor_port=0)
+    hl._addr = (1e18, "192.168.0.141", False)   # 주소 확인을 건너뜀
+    s = hl.snapshot()
+    assert s["web"] == "http://192.168.0.141:8080" and s["floor_web"] is None
+    hl._addr = (1e18, "192.168.0.141", True)
+    hl.floor_port = 8090
+    assert hl.snapshot()["floor_web"] == "http://192.168.0.141:8090"
+    hl._addr = (1e18, None, False)
+    assert hl.snapshot()["web"] is None   # 주소를 모르면 링크 없음
+
+
 def check_web(spool):
     """디버그 웹 화면: 상태 JSON·기록·사진이 나오고 마지막 인식 결과가 담기는지 (빈 포트로 실제로 띄움)"""
     import json
@@ -630,5 +677,6 @@ if __name__ == "__main__":
         check_agent(Path(d) / "a")
         check_patrol(Path(d) / "p")
         check_server(Path(d) / "s")
+        check_health(Path(d) / "h")
         check_web(Path(d) / "w")
     print("edge ok")
