@@ -134,6 +134,8 @@ export function robotLayer(robots) {
 // ---------- 화재 위치와 대피 안내 (서버 evac 메시지, server/dispatch.py) ----------
 
 const FIRE = "#ff4d4d";
+// 지도 위 글자(화재, 출구)가 통로 선 위에 놓여도 읽히게 바탕색 테두리를 두른다
+const HALO = `stroke="${C.bg}" stroke-width="10" stroke-linejoin="round" paint-order="stroke"`;
 // 비상구 문 자리 (벽 안쪽 x, 문이 뚫린 y 범위)
 const EXIT_DOORS = [{ x: 258, y1: 500, y2: 620 }, { x: 1738, y1: 500, y2: 620 }];
 const DIR_ANGLE = { E: 0, S: 90, W: 180, N: -90 };
@@ -181,7 +183,7 @@ export function fireLayer(fire) {
   if (!p) return "";
   const [x, y] = p;
   return `<circle class="fire-marker" cx="${x}" cy="${y}" r="64" fill="${FIRE}" fill-opacity="0.3" stroke="${FIRE}" stroke-width="8"/>` +
-    `<text x="${x}" y="${y - 78}" font-size="32" font-weight="700" text-anchor="middle" fill="#ffc2c2">화재</text>`;
+    `<text x="${x}" y="${y - 78}" font-size="32" font-weight="700" text-anchor="middle" fill="#ffc2c2" ${HALO}>화재</text>`;
 }
 
 // 출구 마커 옆에 비상구 문이 있으면 그 문 (마커 높이가 문 범위 안이고 가까운 쪽)
@@ -223,7 +225,7 @@ export function guideLayer(evac) {
       s += `<polyline class="guide-path" points="${points([p, [door.x, p[1]]])}" fill="none" stroke="${C.green}" stroke-width="10" stroke-dasharray="26 16"/>`;
     }
     s += `<rect class="guide-exit" x="${p[0] - 40}" y="${p[1] - 40}" width="80" height="80" rx="14" fill="none" stroke="${C.green}" stroke-width="8"/>`;
-    s += `<text x="${p[0]}" y="${p[1] + 74}" font-size="30" font-weight="700" text-anchor="middle" fill="${C.green}">출구</text>`;
+    s += `<text x="${p[0]}" y="${p[1] + 74}" font-size="30" font-weight="700" text-anchor="middle" fill="${C.green}" ${HALO}>출구</text>`;
   }
   for (const g of arrows) {
     const p = MARKER_POS[g.marker];
