@@ -142,10 +142,15 @@ def check_agent(spool):
     assert states[-1]["battery"] == 50 and states[-1]["sonar_cm"] == 50.0 and states[-1]["version"] == "test"
     assert set(states[-1]) == {"marker", "status", "role", "battery", "sonar_cm", "temp_c", "version", "hold"}
 
-    # 마커
+    # 마커: 새 마커를 읽으면 1초를 기다리지 않고 state를 바로 보냄. 같은 마커가 다시 와도 더 보내지 않음
+    run(ag, clock, 0.5)
+    n = len(states)
     dog.inject("E", 1, "color", 3)
-    run(ag, clock, 0.2)
-    assert ag.marker == 3.0
+    run(ag, clock, 0.1)
+    assert ag.marker == 3.0 and len(states) == n + 1 and states[-1]["marker"] == 3.0
+    dog.inject("E", 1, "color", 3)
+    run(ag, clock, 0.1)
+    assert len(states) == n + 1
 
     # 보드 막힘 정지 → obstacle + 사진 + 음성, 풀리면 다시 걸음
     dog.sent.clear()
@@ -194,6 +199,22 @@ def check_agent(spool):
     dog.inject("E", 6, "color", 7)
     run(ag, clock, 0.2)
     assert ag.status == "idle" and ag.target is None
+
+    # dock: 서버는 zone 없이 보냄 → 충전 스테이션(DOCK_MARKER)까지 가서 멈춤. 가는 길의 다른 마커에서는 안 멈춤
+    ag.reporter.inbox.put(("cmd", protocol.command("dock")))
+    run(ag, clock, 0.2)
+    assert ag.status == "dock" and ag.target == config.DOCK_MARKER and dog.sent[-1][0] == "F"
+    for m in (12, 15):
+        dog.inject("E", 7, "color", m)
+        run(ag, clock, 0.2)
+        assert ag.status == "dock"
+    dog.inject("E", 8, "color", config.DOCK_MARKER)
+    run(ag, clock, 0.2)
+    assert ag.status == "idle" and ag.target is None and dog.sent[-1] == ("S",)
+    assert states[-1]["marker"] == config.DOCK_MARKER and states[-1]["status"] == "idle"
+    # zone을 주면 그 마커
+    ag.on_command(protocol.command("dock", zone=15))
+    assert ag.target == 15
 
     # 안전모: 맨머리 5장 중 3장 → helmet 보고 1번 (쿨다운)
     ag, dog, th, clock, events, _ = make(spool, model=Det1([Det("person", 0.9, ()), Det("head", 0.8, ())]))

@@ -295,6 +295,8 @@ class Agent:
         elif ch == "color":
             if val in ("-", ""):
                 return
+            if not _same(val, self.marker):
+                self.next_state = 0.0   # 새 마커는 서버에 바로 알림 (교통 정리 예약·wait가 늦지 않게)
             self.marker = val
             if self.status in ("go", "dock") and self.target is not None and _same(val, self.target):
                 log.info("목표 %s 도착", self.target)
@@ -384,8 +386,11 @@ class Agent:
             self.hold = "stop"
         elif cmd == "resume":
             self._start(self.resume_to or "patrol", target=self.target)
-        elif cmd in ("go", "dock"):
+        elif cmd == "go":
             self._start(cmd, target=msg.get("zone"))
+        elif cmd == "dock":  # 서버는 zone 없이 보냄 → 충전 스테이션 마커에서 멈춤
+            zone = msg.get("zone")
+            self._start(cmd, target=config.DOCK_MARKER if zone is None else zone)
         elif cmd == "wait":
             self._halt("idle")
             self.hold = "wait"
