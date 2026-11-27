@@ -9,7 +9,7 @@ import { FakeServer } from "./fake.js";
 import { checkAdmin, withPassword, loadPassword, savePassword } from "./auth.js";
 import { VIEWBOX, baseMap, legendHtml, robotLayer, fireLayer, guideLayer, MARKER_POS } from "./map.js";
 import { createAlarm } from "./sound.js";
-import { DOCK_MARKER } from "./mapdata.js";
+import { DOCK_MARKER, MARKERS } from "./mapdata.js";
 
 const store = createStore();
 const params = new URLSearchParams(location.search);
@@ -641,13 +641,16 @@ async function confirmFire(id, sure) {
   fireConfirm.error = null;
   render();
   try {
-    const body = { mode: "evacuate" };
-    if (e && e.marker != null) body.fire = e.marker;
-    const res = await adminRequest("/mode", {
+    // 서버는 지도에 없는 마커를 fire로 받으면 400으로 거절한다. 대피는 꼭 되어야 하므로
+    // 지도에 있는 마커 번호일 때만 fire를 싣고, 그래도 400이면 fire 없이 한 번 더 보낸다
+    const send = (body) => adminRequest("/mode", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    const fire = Number.isInteger(e?.marker) && e.marker in MARKERS ? e.marker : null;
+    let res = await send(fire != null ? { mode: "evacuate", fire } : { mode: "evacuate" });
+    if (res.status === 400 && fire != null) res = await send({ mode: "evacuate" });
     if (!res.ok) throw new Error(`서버 응답 ${res.status}`);
     apply(store, { kind: "mode", mode: (await res.json()).mode });
     fireConfirm.asking = null;

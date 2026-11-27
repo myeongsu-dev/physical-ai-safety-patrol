@@ -1220,6 +1220,16 @@ class FakeAudioContext {
   assert.match(el("popup").innerHTML, /대피 모드입니다/);
   assert.ok(!el("popup").innerHTML.includes("data-fire="), "대피 중에는 화재 확정 버튼 없음");
   assert.match(el("evacuate-actions").innerHTML, /data-evac-mute="1"/, "경보음을 안 켰어도 대피 소리는 나므로 멈춤 버튼");
+  // 마커가 지도에 없는 값이면(보드가 두 마커를 같이 읽은 "12+15" 등) fire 없이 대피
+  await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
+  assert.equal((await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "evacuate", fire: 99 }) })).status, 400, "가짜 서버도 없는 마커는 400");
+  await tickWait();
+  const odd = fake._addEvent(fake.robots.B, "flame", { marker: "12+15" });
+  await app.click({ alert: String(odd.id) });
+  await app.click({ fire: String(odd.id), sure: "1" });
+  await tickWait();
+  assert.equal(fake.mode, "evacuate", "마커가 이상해도 대피는 됨");
+  assert.equal(fake.evac.fire, null);
   app.stop();
 }
 
