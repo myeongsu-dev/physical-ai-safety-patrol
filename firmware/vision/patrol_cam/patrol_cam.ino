@@ -4,9 +4,12 @@
 //      검정은 0xA8(화면 위 구역)·0xA9(가운데 구역, 못 찾으면 아래 구역), 7바이트. 0xB0은 세 구역 21바이트 [ID 5, 중심x, 중심y, 좌상x, 좌상y, 우하x, 우하y].
 //      좌표는 160x120 기준(가운데 x=80). 다른 레지스터는 0.
 //   2. 영상 보내기 (켤 때만): USB 시리얼로 JPEG를 이어 보낸다. 찾은 선 상자와 구역 경계를 그려서 보냄.
-//      Wi-Fi를 저장해 두면 http://patrol-cam.local/stream (MJPEG)으로도 보낸다. 받는 쪽이 붙어 있는 동안만 만든다.
+//      Wi-Fi로도 http://<이름>.local/stream (MJPEG)으로 보낸다. 받는 쪽이 붙어 있는 동안만 만든다.
+//   3. Wi-Fi: 저장한 Wi-Fi(최대 4개)를 차례로 시도하고, 20초 동안 못 붙으면 모듈 이름으로 Wi-Fi를 직접 띄운다(192.168.4.1).
 // USB 시리얼 명령 (줄 단위): STREAM 1 / STREAM 0, THR <1~254> (검정 기준 밝기, 저장됨), INFO,
-//   SCAN (보이는 2.4GHz Wi-Fi 목록), WIFI <이름>\t<비밀번호> (저장하고 붙음, 이름 없이 WIFI면 지움),
+//   SCAN (보이는 2.4GHz Wi-Fi 목록), WIFI <이름>\t<비밀번호> (목록 맨 앞에 저장, 최대 4개, 이름 없이 WIFI면 모두 지움),
+//   NAME <모듈 이름> (호스트명 · mDNS · 직접 띄우는 Wi-Fi 이름, 저장됨, 다시 켜면 적용. 로봇마다 다르게: patrol-cam-a …),
+//   APPASS <8자 이상> (직접 띄우는 Wi-Fi 비밀번호, 비우면 열린 Wi-Fi), AP 0 · AP 1 (못 붙을 때 직접 띄우기 끄기 · 켜기),
 //   TXP <0.25dBm 단위, 8~84> (Wi-Fi 송신 세기, 저장됨. USB 없이 I2C 전원만이면 낮춰야 덜 끊김),
 //   OTAKEY <열쇠, 32자까지> (저장됨. 있으면 Wi-Fi로 굽기 POST /update 받음, 이름 없이 OTAKEY면 지움)
 // 빌드·굽기는 firmware/vision/README.md
@@ -77,7 +80,15 @@ static volatile bool streaming = false;
 static uint16_t *shot = NULL;  // 영상용 복사본 (PSRAM)
 static SemaphoreHandle_t shotReady, shotFree;
 static volatile uint32_t frames = 0;
-#define HOSTNAME "patrol-cam"
+#define HOST_DEFAULT "patrol-cam"
+#define NET_MAX 4          // 저장하는 Wi-Fi 수 (집 · 핫스팟 · 시연장 …)
+#define NET_TRY_MS 8000    // 저장한 Wi-Fi 하나를 이만큼 시도하고 다음으로
+#define AP_AFTER_MS 20000  // 이만큼 아무 데도 못 붙으면 직접 Wi-Fi를 띄움
+#define AP_RETRY_MS 30000  // 직접 띄운 동안 저장한 Wi-Fi 다시 시도 간격 (시도할 때 채널이 바뀌어 접속한 기기가 잠깐 끊김)
+static char host[25] = HOST_DEFAULT;
+static String netSsid[NET_MAX], netPass[NET_MAX];
+static int netN = 0;
+static bool apOn = false, apAllowed = true;  // 지금 직접 띄웠는지, 못 붙으면 띄울지(AP 명령, 저장됨)
 // Wi-Fi 영상: streamTask가 만든 마지막 JPEG를 넘겨받아 /stream이 보냄
 static SemaphoreHandle_t webLock;
 static uint8_t *webJpg = NULL;
@@ -333,15 +344,38 @@ static esp_err_t updateHandler(httpd_req_t *req) {
   return ESP_OK;
 }
 
-// 저장된 Wi-Fi로 붙고 /stream을 연다. 이름이 없으면 Wi-Fi를 끔
-static void startWifi() {
-  String ssid = prefs.getString("ssid", ""), pass = prefs.getString("pass", "");
-  if (!ssid.length()) { WiFi.mode(WIFI_OFF); return; }
-  WiFi.mode(WIFI_STA);
-  WiFi.setHostname(HOSTNAME);
-  WiFi.setSleep(false);  // 절전 켜면 영상이 100 ms 넘게 밀림
-  WiFi.begin(ssid.c_str(), pass.c_str());
-  WiFi.setTxPower((wifi_power_t)prefs.getChar("txp", WIFI_POWER_19_5dBm));
+// 저장한 Wi-Fi 목록 읽기 (예전 펌웨어의 ssid · pass 하나는 0번으로 옮김)
+static void loadNets() {
+  if (!prefs.isKey("ssid0") && prefs.getString("ssid", "").length()) {
+    prefs.putString("ssid0", prefs.getString("ssid", ""));
+    prefs.putString("pass0", prefs.getString("pass", ""));
+    prefs.remove("ssid"); prefs.remove("pass");
+  }
+  netN = 0;
+  for (int i = 0; i < NET_MAX; i++) {
+    String sd = prefs.getString(("ssid" + String(i)).c_str(), "");
+    if (!sd.length()) continue;
+    netSsid[netN] = sd;
+    netPass[netN++] = prefs.getString(("pass" + String(i)).c_str(), "");
+  }
+}
+
+// 새 Wi-Fi를 맨 앞에 (같은 이름은 지우고), 빈 이름이면 모두 지움
+static void saveNet(const String &ssid, const String &pass) {
+  String sd[NET_MAX], ps[NET_MAX];
+  int n = 0;
+  if (ssid.length()) { sd[n] = ssid; ps[n++] = pass; }
+  for (int i = 0; i < netN && n < NET_MAX; i++)
+    if (ssid.length() && netSsid[i] != ssid) { sd[n] = netSsid[i]; ps[n++] = netPass[i]; }
+  for (int i = 0; i < NET_MAX; i++) {
+    prefs.putString(("ssid" + String(i)).c_str(), i < n ? sd[i] : "");
+    prefs.putString(("pass" + String(i)).c_str(), i < n ? ps[i] : "");
+  }
+  loadNets();
+}
+
+// 영상 · 굽기 웹 서버 (Wi-Fi가 붙든 직접 띄우든 같은 서버)
+static void startHttpd() {
   if (httpd) return;
   httpd_config_t c = HTTPD_DEFAULT_CONFIG();
   c.core_id = 0;  // 선 찾기(코어 1)와 떨어뜨림
@@ -352,6 +386,47 @@ static void startWifi() {
   if (httpd_start(&httpd, &c) == ESP_OK) {
     httpd_register_uri_handler(httpd, &u);
     httpd_register_uri_handler(httpd, &up);
+  }
+}
+
+// loop마다: 붙어 있으면 직접 띄운 Wi-Fi를 끄고, 아니면 저장한 Wi-Fi를 하나씩 차례로 시도(목록 전체 검색으로 멈추지 않게).
+// AP_AFTER_MS 동안 못 붙으면 모듈 이름으로 직접 띄움(AP 켜짐일 때). 저장한 것도 없고 AP도 꺼져 있으면 Wi-Fi 끔
+static void wifiTick() {
+  static uint32_t tryAt = 0, lostAt = millis();
+  static int next = 0;
+  static bool mdns = false, started = false;
+  uint32_t now = millis();
+  if (!started) {
+    started = true;
+    if (!netN && !apAllowed) { WiFi.mode(WIFI_OFF); return; }
+    WiFi.mode(WIFI_STA);
+    WiFi.setHostname(host);
+    WiFi.setSleep(false);  // 절전 켜면 영상이 100 ms 넘게 밀림
+    WiFi.setTxPower((wifi_power_t)prefs.getChar("txp", WIFI_POWER_19_5dBm));
+    startHttpd();
+    tryAt = now - NET_TRY_MS;
+  }
+  if (WiFi.getMode() == WIFI_OFF) return;
+  if (WiFi.status() == WL_CONNECTED) {
+    lostAt = now;
+    if (apOn) { WiFi.softAPdisconnect(true); WiFi.mode(WIFI_STA); apOn = false; }
+  } else {
+    if (netN && now - tryAt >= (uint32_t)(apOn ? AP_RETRY_MS : NET_TRY_MS)) {
+      tryAt = now;
+      next %= netN;
+      WiFi.begin(netSsid[next].c_str(), netPass[next].c_str());
+      next++;
+    }
+    if (!apOn && apAllowed && now - lostAt >= AP_AFTER_MS) {
+      String pw = prefs.getString("appass", "");
+      WiFi.mode(WIFI_AP_STA);
+      apOn = WiFi.softAP(host, pw.length() >= 8 ? pw.c_str() : NULL);
+      WiFi.setTxPower((wifi_power_t)prefs.getChar("txp", WIFI_POWER_19_5dBm));
+    }
+  }
+  if (!mdns && (WiFi.status() == WL_CONNECTED || apOn) && MDNS.begin(host)) {  // 붙거나 띄운 뒤에 이름을 알림
+    MDNS.addService("http", "tcp", 80);
+    mdns = true;
   }
 }
 
@@ -382,13 +457,16 @@ void setup() {
   prefs.begin("patrolcam", false);
   thr = prefs.getUChar("thr", THR_DEFAULT);
   prefs.getString("otakey", otaKey, sizeof(otaKey));
+  prefs.getString("host", host, sizeof(host));
+  if (!host[0]) strcpy(host, HOST_DEFAULT);
+  loadNets();
+  apAllowed = prefs.getBool("ap", true);
   bool cam = startCamera();
   shot = (uint16_t *)ps_malloc(W * H * 2);
   shotReady = xSemaphoreCreateBinary();
   shotFree = xSemaphoreCreateBinary();
   xSemaphoreGive(shotFree);
   webLock = xSemaphoreCreateMutex();
-  startWifi();
   Wire.onReceive(onReceive);
   Wire.onRequest(onRequest);
   Wire.begin((uint8_t)I2C_ADDR, I2C_SDA, I2C_SCL, 100000);
@@ -401,11 +479,7 @@ void setup() {
 void loop() {
   static String line;
   static uint32_t t0 = millis(), f0 = 0;
-  static bool mdns = false;
-  if (!mdns && WiFi.status() == WL_CONNECTED && MDNS.begin(HOSTNAME)) {  // 붙은 뒤에 이름을 알림
-    MDNS.addService("http", "tcp", 80);
-    mdns = true;
-  }
+  wifiTick();
   while (Serial.available()) {
     char ch = Serial.read();
     if (ch != '\n') { if (line.length() < 120) line += ch; continue; }
@@ -416,21 +490,31 @@ void loop() {
       int v = line.substring(4).toInt();
       if (v >= 1 && v <= 254) { thr = v; prefs.putUChar("thr", v); }
     } else if (line == "SCAN") {
-      if (WiFi.getMode() == WIFI_OFF) WiFi.mode(WIFI_STA);
+      bool off = WiFi.getMode() == WIFI_OFF;
+      if (off) WiFi.mode(WIFI_STA);
       int n = WiFi.scanNetworks();
       for (int i = 0; i < n; i++) Serial.printf("\nSCAN %d %s\n", WiFi.RSSI(i), WiFi.SSID(i).c_str());
-      if (!prefs.getString("ssid", "").length()) WiFi.mode(WIFI_OFF);
+      if (off) WiFi.mode(WIFI_OFF);
     } else if (line.startsWith("WIFI")) {
       String v = line.substring(5);
       int tab = v.indexOf('\t');
-      prefs.putString("ssid", tab < 0 ? v : v.substring(0, tab));
-      prefs.putString("pass", tab < 0 ? "" : v.substring(tab + 1));
-      WiFi.disconnect();
-      mdns = false;
-      startWifi();
+      saveNet(tab < 0 ? v : v.substring(0, tab), tab < 0 ? "" : v.substring(tab + 1));
+      if (netN && WiFi.getMode() != WIFI_OFF) { WiFi.disconnect(); WiFi.begin(netSsid[0].c_str(), netPass[0].c_str()); }  // 새로 넣은 것부터
     } else if (line.startsWith("TXP ")) {
       int v = line.substring(4).toInt();
       if (v >= 8 && v <= 84) { prefs.putChar("txp", v); WiFi.setTxPower((wifi_power_t)v); }
+    } else if (line.startsWith("NAME ")) {  // 영문 소문자 · 숫자 · -만, 다시 켜면 적용
+      String v = line.substring(5);
+      v.toLowerCase();
+      bool ok = v.length() >= 1 && v.length() < sizeof(host);
+      for (size_t i = 0; i < v.length(); i++) ok &= isalnum(v[i]) || v[i] == '-';
+      if (ok) prefs.putString("host", v);
+    } else if (line.startsWith("APPASS")) {  // 8자 이상, 비우면 열린 Wi-Fi
+      String v = line.length() > 7 ? line.substring(7) : "";
+      if (!v.length() || (v.length() >= 8 && v.length() <= 63)) prefs.putString("appass", v);
+    } else if (line == "AP 0" || line == "AP 1") {
+      apAllowed = line == "AP 1";
+      prefs.putBool("ap", apAllowed);
     } else if (line.startsWith("OTAKEY")) {  // 이름 없이 OTAKEY면 지움 (Wi-Fi 굽기 끔)
       String v = line.length() > 7 ? line.substring(7) : "";
       if (v.length() < sizeof(otaKey)) { prefs.putString("otakey", v); strcpy(otaKey, v.c_str()); }
@@ -441,9 +525,10 @@ void loop() {
       memcpy(a9, regs[0xA9], 7);
       portEXIT_CRITICAL(&regLock);
       float fps = (frames - f0) * 1000.0 / max(1UL, millis() - t0);
-      String wifi = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : prefs.getString("ssid", "").length() ? "connecting" : "off";
-      Serial.printf("\nINFO stream=%d thr=%d fps=%.1f a9=%d,%d,%d wifi=%s web=%d rssi=%d txp=%d\n", streaming, thr, fps, a9[0], a9[1], a9[2],
-                    wifi.c_str(), webClients, (int)WiFi.RSSI(), (int)WiFi.getTxPower());
+      String wifi = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString()
+                    : apOn ? "ap:" + WiFi.softAPIP().toString() : WiFi.getMode() == WIFI_OFF ? "off" : "connecting";
+      Serial.printf("\nINFO stream=%d thr=%d fps=%.1f a9=%d,%d,%d wifi=%s web=%d rssi=%d txp=%d name=%s nets=%d\n", streaming, thr, fps,
+                    a9[0], a9[1], a9[2], wifi.c_str(), webClients, (int)WiFi.RSSI(), (int)WiFi.getTxPower(), host, netN);
       t0 = millis(); f0 = frames;
     }
     line = "";
