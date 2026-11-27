@@ -10,7 +10,7 @@ import time
 import Hiwonder_IIC
 from HW_MechDog import MechDog
 
-VERSION = "dog-1.18.0"  # 올리는 규칙은 README "버전". upload.py가 올릴 때 뒤에 +해시를 붙임
+VERSION = "dog-1.18.1"  # 올리는 규칙은 README "버전". upload.py가 올릴 때 뒤에 +해시를 붙임
 MAX_MS = 15000   # 이동 명령 한 번의 최대 시간
 QUIET_MS = 2000  # Pi가 이만큼 조용하면 정지 + LED 오류
 # 걸음: 발 드는 시간 · 딛는 시간(ms) · 다리 드는 높이 (공식 예제 change_gait_parameter.py 값). 켤 때 넣고, G로 바꿀 수 있음.
@@ -41,7 +41,7 @@ line_color = getattr(cam, "BLACK", 0) if cam else 0
 # 지금 하고 있는 일: until(이동 끝 시각), mode(None/move/follow/guard), 스트림 주기·채널, rx(Pi에게서 마지막으로 받은 시각)
 st = {"until": None, "mode": None, "args": None, "period": 0, "chans": [], "events": [], "t0": 0, "last": {}, "guard": None,
       "rx": 0, "alarm": False, "led": None, "steer": 0,
-      "win": [], "search": None, "side": 1, "pivot": False, "near_t": 0, "mid_x": -1, "edge": 0, "bt": 0, "block": 0}
+      "win": [], "search": None, "side": 1, "pivot": False, "near_t": 0, "mid_x": -1, "bt": 0, "block": 0}
 # win: 선 따라가기의 한 걸음 기록. search: 선을 찾는 중이면 (시작 시각, 시작 yaw). side: 마지막으로 꺾던 쪽(+ 왼쪽).
 # pivot: 제자리 돌기 중. near_t · mid_x: 아래 구역을 마지막으로 본 시각 · 그때 가운데 구역 x (aim)
 
@@ -73,8 +73,6 @@ def line_xs():
     레지스터 번호를 먼저 따로 써야 함(readfrom_mem처럼 이어서 읽으면 비전 모듈이 지난 레지스터 값을 줌, 2026-11-26 실기)"""
     cam.iic.writeto(0x53, bytes([0xB0]))
     c = cam.iic.readfrom(0x53, 21)
-    left, right = c[0] and c[3] <= EDGE_PX, c[0] and c[5] >= 159 - EDGE_PX
-    st["edge"] = 0 if left == right else (1 if left else -1)  # 위 구역 띠가 화면 옆 끝에 닿음 (+ 왼쪽), 양쪽 다면 가로지르는 선
     return tuple(c[i + 1] if c[i] else -1 for i in (0, 7, 14))
 
 
@@ -314,10 +312,8 @@ TURN_TABLE = ((0, 0.0), (10, 1.9), (20, 6.2), (30, 12.7), (40, 17.3))
 # 들어갈 때는 최대의 100%, 나올 때는 70% 밑 (경계에서 왔다 갔다 하지 않게)
 PIVOT = (30, 40)
 PIVOT_OUT = 0.7
-# U자처럼 급한 곡선은 위 구역에서 테이프가 옆으로 누워 화면 옆 끝(EDGE_PX 안)으로 빠져나감. 발 앞 점이 반대쪽으로 EDGE_NEAR_CM 넘게
-# 비켜나 있지 않으면 놓치기 전에 그쪽으로 PIVOT (2026-11-27 주행 영상: 위 구역 띠가 끝에 닿고 0.15~0.5초 뒤 아래 구역까지 놓침)
-EDGE_PX = 2
-EDGE_NEAR_CM = 1.0
+# 위 구역 띠가 화면 옆 끝에 닿을 때 제자리로 돌던 것(1.18.0)은 뺌: 아래 칸이 회전 중심보다 약 17 cm 앞이라 제자리 10°에 시야가
+# 옆으로 약 3 cm 쓸려(아래 칸 시야 ±2.5 cm) 오히려 선을 밀어내 첫 U자에서 놓침(2026-11-27 D2). 1.17 동작으로 되돌림
 # 걸을 때 머리(카메라)가 걸음마다 좌우로 흔들림(T15: 약 0.7초 주기, 선 x 가운데 ±15칸 · 먼 ±20칸) → 한 걸음 동안의 평균으로 꺾음
 FOLLOW_WIN_MS = 700
 # 어느 선을 따라가는지는 아래 구역이 정함. 아래 구역이 머리 흔들림 등으로 잠깐(NEAR_KEEP_MS) 빠지면 가운데 구역 선이 바로 전
@@ -419,10 +415,7 @@ def tick_follow(stride, amax):
     if rate:
         st["side"] = 1 if rate > 0 else -1
     top = interp(TURN_TABLE, amax)
-    edge = st["edge"]
-    if edge and p[0][1] * edge <= EDGE_NEAR_CM:  # 옆 +는 오른쪽, edge +는 왼쪽이라 곱이 +면 발 앞 점이 반대쪽
-        st["side"], st["pivot"] = edge, True
-    elif abs(rate) > top:
+    if abs(rate) > top:
         st["pivot"] = True
     elif abs(rate) < PIVOT_OUT * top:
         st["pivot"] = False
