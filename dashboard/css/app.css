@@ -688,3 +688,11 @@ ul { list-style: none; margin: 0; padding: 0; }
 .fire-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
 .fire-row .check { flex: 0 0 auto; }
 .fire-done { margin: 0 0 var(--gap); color: var(--bad); font-weight: 600; }
+
+/* ---------- 사람 호출 (서버와 끊겨 멈춘 로봇, 이슈 #39) ---------- */
+.link-alerts { margin: 0 0 var(--gap); padding: 10px 14px; border: 1px solid var(--warn); border-left-width: 6px; border-radius: var(--radius); background: var(--warn-bg); color: var(--text); }
+.link-alerts[hidden] { display: none; }
+.link-alerts p { margin: 0; font-size: 15px; }
+.link-alerts p + p { margin-top: 4px; }
+.link-alerts b { color: var(--warn); margin-right: 6px; }
+.robot-cards .call-human { margin-top: 4px; color: var(--warn); font-weight: 700; font-size: 13px; }

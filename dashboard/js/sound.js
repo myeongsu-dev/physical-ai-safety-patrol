@@ -12,6 +12,7 @@ const PATTERN = {
   obstacle: [660, 2],
   heat: [520, 1],
   floor_object: [520, 1],
+  link: [440, 2], // 사람 호출 (로봇이 서버와 끊겨 멈춤): 낮게 2번
 };
 const BEEP_SEC = 0.15;
 const GAP_SEC = 0.1;

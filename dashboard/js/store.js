@@ -15,7 +15,7 @@ export function robotLabel(name) {
 }
 
 // 이 시간 안에 state가 와야 연결된 것으로 본다. server/fleet.py의 ONLINE_SEC과 같게 둔다
-export const ONLINE_SEC = 5;
+export const ONLINE_SEC = 7;
 
 export function createStore() {
   return {
@@ -32,6 +32,9 @@ export function createStore() {
     // 경보 이력: id → { event, role }. 해제된 경보도 남긴다 (event.checked).
     // 이 화면을 연 뒤에 받은 경보 + 서버에서 꺼내 온 지난 경보(GET /events, loadHistory)
     history: new Map(),
+    // 사람 호출 (이슈 #39): 로봇 이름 → 서버가 보낸 link_alert (active인 것만).
+    // 로봇이 서버와 끊겨 단독 모드로 stop_marker에서 멈추면, 사람이 가서 확인하라고 서버가 보낸다
+    linkAlerts: {},
   };
 }
 
@@ -65,6 +68,11 @@ export function apply(store, msg, now = Date.now()) {
       exits: Array.isArray(msg.exits) ? msg.exits : [],
       arrows: Array.isArray(msg.arrows) ? msg.arrows : [],
     };
+  } else if (msg.kind === "link_alert") {
+    // {"kind": "link_alert", robot, marker, stop_marker, online, active}. active가 false면 내린다
+    if (!msg.robot) return;
+    if (msg.active) store.linkAlerts[msg.robot] = { ...msg, since: store.linkAlerts[msg.robot]?.since ?? now };
+    else delete store.linkAlerts[msg.robot];
   } else if (msg.kind === "event") {
     if (msg.checked) store.events.delete(msg.id);
     else store.events.set(msg.id, msg);
@@ -235,6 +243,16 @@ export function robotStop(msg) {
 // 서버가 세운 대기 (hold "wait"). 멈춤이 아니라 순찰 중으로 센다
 export function robotWaiting(msg) {
   return !!msg && msg.status === "idle" && msg.hold === "wait";
+}
+
+// 사람 호출 목록 (먼저 온 것부터). 화면 말: "MD-2 연결 끊김, 마커 1로 가 주세요"
+// 갈 곳은 멈출 마커(stop_marker). 모르면 마지막 마커(marker)
+export function linkAlertList(store) {
+  return Object.values(store.linkAlerts).sort((a, b) => a.since - b.since || String(a.robot).localeCompare(String(b.robot)));
+}
+export function linkAlertText(a) {
+  const where = Number.isInteger(a.stop_marker) ? a.stop_marker : Number.isInteger(a.marker) ? a.marker : null;
+  return `${robotLabel(a.robot)} 연결 끊김, ${where != null ? `마커 ${where}로 가 주세요` : "로봇 위치를 확인해 주세요"}`;
 }
 
 // 로봇 위치를 글자로. 예: "A 경로 · 마커 8", "충전 스테이션", "마커 14"
