@@ -2,7 +2,7 @@
 // 지도: 바탕(구역, 통로, 마커, 비상구, 충전 스테이션) 위에 화재 위치, 대피 화살표, (관리자 화면) 로봇 위치를 얹는다.
 
 import {
-  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, evacView, loadHistory, alarmStats, robotStop, robotWaiting, HOLD_TEXT, helmetLog,
+  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, evacView, loadHistory, alarmStats, robotStop, robotWaiting, HOLD_TEXT, helmetLog, linkAlertList, linkAlertText,
 } from "./store.js";
 import { connect, request } from "./conn.js";
 import { FakeServer } from "./fake.js";
@@ -84,9 +84,11 @@ function render() {
     setItem("conn-status", s.server === "closed" ? "bad" : "", s.server === "closed" ? "서버 끊김" : "서버 연결 중");
   }
 
-  // 알림 줄
+  renderLinkAlerts();
+
+  // 알림 줄. 사람 호출이 떠 있는 로봇은 위 띠에 나오므로 여기서는 뺀다
   const notice = document.getElementById("notice");
-  const off = s.robots.filter((r) => !r.online);
+  const off = s.robots.filter((r) => !r.online && !store.linkAlerts[r.name]);
   if (s.server === "closed") {
     notice.textContent = `서버와 연결이 끊겼습니다. 다시 연결하는 중 (${ago(s.serverSince, now)}째)`;
     notice.hidden = false;
@@ -285,6 +287,7 @@ function renderRobots(s, serverOpen, now) {
           <span class="state">${esc(state)}</span></div>
         <div class="place">${esc(robotPlace(msg))}</div>
         ${waiting ? `<div class="wait-reason muted">${esc(HOLD_TEXT.wait)}</div>` : ""}
+        ${msg?.call_human ? `<div class="call-human">사람 호출 중</div>` : ""}
         ${stop ? `<div class="stop-reason">${esc(stop.reason ?? "현장 확인 필요")}</div>${resumeHtml(r.name, stop)}` : ""}
         <div class="meta">${meta.join(" · ")}</div>
         ${versionLine(msg)}
@@ -614,7 +617,7 @@ function closedText(e) {
 const fireConfirm = { asking: null, pending: false, error: null }; // asking: 묻고 있는 경보 id
 
 function fireHtml(e) {
-  if (e.type !== "flame") return "";
+  if (e.type !== "flame" || e.checked) return ""; // 해제한(오탐 포함) 지난 경보에는 버튼 없음
   if (store.mode === "evacuate") return `<p class="fire-done">대피 모드입니다 (화재 확정됨)</p>`;
   const err = fireConfirm.error ? `<p class="error">${esc(fireConfirm.error)}</p>` : "";
   if (fireConfirm.pending) return `<div class="fire-row"><button type="button" class="fire-btn" disabled>보내는 중</button></div>${err}`;
@@ -652,7 +655,13 @@ async function confirmFire(id, sure) {
     let res = await send(fire != null ? { mode: "evacuate", fire } : { mode: "evacuate" });
     if (res.status === 400 && fire != null) res = await send({ mode: "evacuate" });
     if (!res.ok) throw new Error(`서버 응답 ${res.status}`);
+    const prevMode = store.mode;
     apply(store, { kind: "mode", mode: (await res.json()).mode });
+    // 응답이 WebSocket mode보다 먼저 오면 noticeMode가 바뀐 것을 못 보므로 여기서 울린다
+    if (prevMode !== "evacuate" && store.mode === "evacuate") {
+      evacAlarm.ringing = true;
+      playAlarm("evacuate");
+    }
     fireConfirm.asking = null;
   } catch (err) {
     fireConfirm.error = `화재 확정을 보내지 못했습니다 (${err.message})`;
@@ -697,6 +706,25 @@ function noticeEvent(msg, now = Date.now()) {
   if (first) return; // 화면을 열 때 이미 있던 경보
   if (POPUP_TYPES.includes(msg.type)) alertState.queue.push(msg.id);
   playAlarm(msg.type);
+}
+
+// 사람 호출 (이슈 #39). 새로 뜨면 관리자 화면에서 경보음 한 번 (경보음을 켜 뒀을 때)
+function noticeLinkAlert(msg, wasActive, now = Date.now()) {
+  if (!admin || msg.kind !== "link_alert" || !msg.active || wasActive) return;
+  const first = alertState.openedAt == null || now - alertState.openedAt < SNAPSHOT_MS;
+  if (!first) playAlarm("link");
+}
+
+let linkKey = "";
+function renderLinkAlerts() {
+  const list = linkAlertList(store);
+  const key = JSON.stringify(list.map((a) => [a.robot, a.marker, a.stop_marker]));
+  if (key === linkKey) return;
+  linkKey = key;
+  const el = document.getElementById("link-alerts");
+  el.hidden = !list.length;
+  el.innerHTML = list.map((a) => `<p><b>사람 호출</b> ${esc(linkAlertText(a))}${
+    Number.isInteger(a.marker) && Number.isInteger(a.stop_marker) && a.marker !== a.stop_marker ? ` <span class="muted">(마지막으로 본 마커 ${esc(a.marker)})</span>` : ""}</p>`).join("");
 }
 
 // 서버 메시지가 올 때마다 부른다. 평상시 → 대피로 바뀌면 대피 경보음
@@ -810,6 +838,8 @@ function syncEvacRepeat() {
 
 // 눌러서 연 팝업이면 그것만 닫고, 저절로 뜬 팝업이면 다음 대기 팝업으로
 function closePopup() {
+  fireConfirm.asking = null;
+  fireConfirm.error = null;
   if (alertState.view != null) alertState.view = null;
   else alertState.queue.shift();
   render();
@@ -1110,7 +1140,9 @@ const conn = connect({
   fake: fakeServer,
   onMessage: (msg) => {
     const prevMode = store.mode;
+    const wasLink = msg.kind === "link_alert" && !!store.linkAlerts[msg.robot];
     apply(store, msg);
+    noticeLinkAlert(msg, wasLink);
     noticeEvent(msg);
     noticeMode(msg, prevMode);
     render();

@@ -15,7 +15,7 @@ export function robotLabel(name) {
 }
 
 // 이 시간 안에 state가 와야 연결된 것으로 본다. server/fleet.py의 ONLINE_SEC과 같게 둔다
-export const ONLINE_SEC = 5;
+export const ONLINE_SEC = 7;
 
 export function createStore() {
   return {
@@ -32,6 +32,9 @@ export function createStore() {
     // 경보 이력: id → { event, role }. 해제된 경보도 남긴다 (event.checked).
     // 이 화면을 연 뒤에 받은 경보 + 서버에서 꺼내 온 지난 경보(GET /events, loadHistory)
     history: new Map(),
+    // 사람 호출 (이슈 #39): 로봇 이름 → 서버가 보낸 link_alert (active인 것만).
+    // 로봇이 서버와 끊겨 단독 모드로 stop_marker에서 멈추면, 사람이 가서 확인하라고 서버가 보낸다
+    linkAlerts: {},
   };
 }
 
@@ -45,6 +48,9 @@ export function setServer(store, status, now = Date.now()) {
 export function apply(store, msg, now = Date.now()) {
   if (msg.kind === "state") {
     store.robots[msg.robot] = msg;
+    // 사람 호출 띠는 active:false로 내리지만, 대시보드가 끊긴 사이에 풀렸거나 서버가 다시 켜지면
+    // 그 메시지를 못 받는다. state의 call_human이 false면 띠도 내린다 (칸이 없으면 그대로 둠)
+    if (msg.call_human === false) delete store.linkAlerts[msg.robot];
     if (msg.online === false) {
       // 서버가 끊겼다고 알려 준 경우: 화면을 새로 열 때의 첫 묶음, 또는 5초 넘게 state가 안 와서
       // 서버가 한 번 보내 주는 알림 (server/link-status). 이 state의 다른 값은 마지막으로 받은 것
@@ -65,6 +71,11 @@ export function apply(store, msg, now = Date.now()) {
       exits: Array.isArray(msg.exits) ? msg.exits : [],
       arrows: Array.isArray(msg.arrows) ? msg.arrows : [],
     };
+  } else if (msg.kind === "link_alert") {
+    // {"kind": "link_alert", robot, marker, stop_marker, online, active}. active가 false면 내린다
+    if (!msg.robot) return;
+    if (msg.active) store.linkAlerts[msg.robot] = { ...msg, since: store.linkAlerts[msg.robot]?.since ?? now };
+    else delete store.linkAlerts[msg.robot];
   } else if (msg.kind === "event") {
     if (msg.checked) store.events.delete(msg.id);
     else store.events.set(msg.id, msg);
@@ -235,6 +246,16 @@ export function robotStop(msg) {
 // 서버가 세운 대기 (hold "wait"). 멈춤이 아니라 순찰 중으로 센다
 export function robotWaiting(msg) {
   return !!msg && msg.status === "idle" && msg.hold === "wait";
+}
+
+// 사람 호출 목록 (먼저 온 것부터). 화면 말: "MD-2 연결 끊김, 마커 1로 가 주세요"
+// 갈 곳은 멈출 마커(stop_marker). 모르면 마지막 마커(marker)
+export function linkAlertList(store) {
+  return Object.values(store.linkAlerts).sort((a, b) => a.since - b.since || String(a.robot).localeCompare(String(b.robot)));
+}
+export function linkAlertText(a) {
+  const where = Number.isInteger(a.stop_marker) ? a.stop_marker : Number.isInteger(a.marker) ? a.marker : null;
+  return `${robotLabel(a.robot)} 연결 끊김, ${where != null ? `마커 ${where}로 가 주세요` : "로봇 위치를 확인해 주세요"}`;
 }
 
 // 로봇 위치를 글자로. 예: "A 경로 · 마커 8", "충전 스테이션", "마커 14"

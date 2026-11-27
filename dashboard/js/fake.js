@@ -282,6 +282,7 @@ export class FakeServer {
       C: new FakeRobot("C", { battery: 100, role: null, rng: this.rng }),
       D: new FakeRobot("D", { battery: 40, role: null, rng: this.rng }),
     };
+    this.linkAlerts = {}; // 로봇 이름 → active인 link_alert
     if (past > 0) this._seedPast(past);
   }
 
@@ -388,6 +389,27 @@ export class FakeServer {
     return this._addEvent(r, type);
   }
 
+  // 사람 호출 (이슈 #39): 로봇이 서버와 끊겨 stopMarker에서 멈춤. linkBack으로 내림
+  linkLost(name, stopMarker) {
+    const r = this.robots[name] || this._pickRobot();
+    r.halt("server");
+    r.callHuman = true;
+    const msg = { kind: "link_alert", robot: r.name, marker: r.marker, stop_marker: stopMarker ?? r.marker, online: false, active: true };
+    this.linkAlerts[r.name] = msg;
+    this._push(msg);
+    this._push(this._stateMsg(r));
+    return msg;
+  }
+
+  linkBack(name) {
+    const r = this.robots[name];
+    if (!r) return;
+    r.callHuman = false;
+    delete this.linkAlerts[r.name];
+    this._push({ kind: "link_alert", robot: r.name, marker: r.marker, stop_marker: r.marker, online: true, active: false });
+    this._push(this._stateMsg(r));
+  }
+
   halt(name, hold = null) {
     const r = this.robots[name] || this._pickRobot();
     r.halt(hold);
@@ -439,6 +461,7 @@ export class FakeServer {
       { kind: "mode", mode: this.mode },
       ...(this.evac ? [this.evac] : []),
       ...this._openEvents(),
+      ...Object.values(this.linkAlerts), // 사람 호출: 붙자마자 active인 것 (서버도 같게 보내 달라고 부탁)
     ];
   }
 
@@ -447,7 +470,7 @@ export class FakeServer {
   }
 
   _stateMsg(r) {
-    return { kind: "state", robot: r.name, ...r.state(), online: true };
+    return { kind: "state", robot: r.name, ...r.state(), call_human: !!r.callHuman, online: true };
   }
 
   _addEvent(r, type, extra = {}) {
