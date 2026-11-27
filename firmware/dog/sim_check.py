@@ -183,11 +183,8 @@ fresh(25); assert run(-1, 158, 80) == (30, -40)
 assert run(80, 80)[0] == 50
 def edge_band(x1, x2):  # 위 구역 띠를 가로 범위로 (U자에서 옆으로 누운 테이프)
     Cam.line[0] = bytes([5, (x1 + x2) // 2, 20, x1, 1, x2, 39]); clock[0] += 20; dt.tick_motion(); return moves[-1]
-# U자 들머리: 발 앞은 가운데인데 위 구역 띠가 화면 왼쪽 끝에 닿으면 놓치기 전에 왼쪽으로 제자리 돌기 (오른쪽도 같게)
-fresh(40); run(80, 80, 80, 20); assert edge_band(0, 93) == (30, 40)
-fresh(40); run(80, 80, 80, 20); assert edge_band(100, 159) == (30, -40)
-fresh(40); run(80, 80, 80, 20); assert edge_band(0, 159)[0] == 50     # 양쪽 끝에 다 닿는 띠는 가로지르는 선이라 방향 모름
-fresh(40); run(80, 140, 140, 20); assert edge_band(0, 60) != (30, 40)  # 발 앞 점이 반대쪽(오른쪽 약 2 cm)이면 왼쪽으로 안 돎
+# 위 구역 띠가 화면 끝에 닿아도 제자리로 돌지 않고 걸으며 그쪽으로 꺾음 (1.18.0에서 제자리로 돌다 선을 밀어냄)
+fresh(40); run(80, 80, 80, 20); m = edge_band(0, 93); assert m[0] == 50 and m[1] > 0, m
 fresh()                                               # 한 걸음마다 좌우로 흔들리는 선(머리 흔들림)은 평균 0이라 크게 안 꺾음
 for k in range(70):
     m = follow(80 + (20 if (k // 9) % 2 else -20), 80 + (15 if (k // 9) % 2 else -15))
