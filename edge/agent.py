@@ -15,9 +15,10 @@
 - F에 보드 ok가 오기 전에는 state에 patrol이 아니라 idle로 알림
 - 서버 신호(potent/server/alive, 1초마다)가 ALIVE_TIMEOUT_S 안 오면 단독 모드: 다음 마커까지 가서 멈춤 (hold server).
   다시 붙어도 서버 resume·patrol을 기다림. 서버 신호를 한 번도 못 받았으면(예전 서버) 이 감시는 꺼져 있음
-- 배터리가 BATTERY_STOP_PCT(15%) 이하로 BATTERY_LOW_S 동안 계속되면 그 자리에서 멈춤 (hold battery)
+- 배터리(최근 BATTERY_AVG_S 3초 평균, state battery도 이 값)가 BATTERY_STOP_PCT(15%) 이하면 그 자리에서 멈춤 (hold battery)
 """
 import argparse
+import collections
 import logging
 import queue
 import signal
@@ -81,7 +82,7 @@ class Agent:
         self.alive_at = None      # 서버 신호를 마지막으로 받은 시각 (None: 아직 한 번도 못 받음 → 감시 안 함)
         self.server_lost = False
         self.solo = None          # 단독 모드에서 멈추러 가는 중: {"from": 끊길 때 마커, "by": 늦어도 멈출 시각}
-        self.battery_low_since = None
+        self.bat_samples = collections.deque()  # (시각, %) 최근 BATTERY_AVG_S 동안의 보드 배터리
 
         self.blocked = None       # {"since", "person", "reported"}
         self.heat = None          # {"temps", "next", "flame", "flame_hit", "reported", "until"}
@@ -166,7 +167,7 @@ class Agent:
     def state(self):
         """potent/{로봇}/state 내용 (docs/protocol.md 2절). 걷는 상태는 보드가 F에 ok 한 뒤에만 알림"""
         status = self.status if self.status not in MOVING or self.acked else "idle"
-        return {"marker": self.marker, "status": status, "role": self.role, "battery": self.board.battery,
+        return {"marker": self.marker, "status": status, "role": self.role, "battery": self.battery,
                 "sonar_cm": self.board.sonar_cm, "temp_c": self.temp_c, "version": self.version,
                 "hold": self.hold}   # 다시 걷지 않는 이유 (없으면 None → null). 서버는 이것이 None일 때만 자동 출발
 
@@ -229,7 +230,7 @@ class Agent:
         if self.clock() - self.last_d > config.SENSOR_STALE_S:
             return "보드 측정값(D)이 안 옴"
         if self._battery_low():
-            return "배터리 %s%% (%d%% 이하)" % (self.board.battery, config.BATTERY_STOP_PCT)
+            return "배터리 %s%% (%d%% 이하)" % (self.battery, config.BATTERY_STOP_PCT)
         if self.board.commands is not None and "F" not in self.board.commands:
             return "보드가 F를 지원하지 않음 (main.py 확인)"
         if config.LINE_GUARD and "line" in self.board.chans:
@@ -256,6 +257,7 @@ class Agent:
             self.last_d = self.clock()
         ev = self.board.update(parts)
         if parts[0] == "D":
+            self._note_battery(self.last_d)
             self._pi_guard()
             self._line_guard()
         elif len(parts) >= 2 and parts[1] == "ok":
@@ -476,20 +478,32 @@ class Agent:
         self._halt("idle")
         self.hold = "server"
 
-    def _battery_low(self):
+    def _note_battery(self, now):
         b = self.board.battery
-        return b is not None and b <= config.BATTERY_STOP_PCT
+        if b is None:
+            return
+        q = self.bat_samples
+        q.append((now, b))
+        while now - q[0][0] > config.BATTERY_AVG_S:
+            q.popleft()
+
+    @property
+    def battery(self):
+        """보드 배터리 %의 최근 BATTERY_AVG_S 평균 (state battery). 걸을 때 전압이 잠깐 떨어지는 것을 거름"""
+        q = self.bat_samples
+        return int(round(sum(b for _, b in q) / len(q))) if q else None
+
+    def _battery_low(self, full=False):
+        """평균이 BATTERY_STOP_PCT 이하인지. full이면 평균 시간을 거의 다 채운 뒤에만 (켜자마자 한 값으로 멈추지 않게)"""
+        b, q = self.battery, self.bat_samples
+        if b is None or b > config.BATTERY_STOP_PCT:
+            return False
+        return not full or q[-1][0] - q[0][0] >= config.BATTERY_AVG_S * 0.8
 
     def _watch_battery(self, now):
-        """배터리가 BATTERY_STOP_PCT 이하로 BATTERY_LOW_S 동안 계속되면 그 자리에서 멈춤 (걷는 중 전압이 잠깐 떨어지는 것은 무시)"""
-        if not self._battery_low():
-            self.battery_low_since = None
-            return
-        if self.battery_low_since is None:
-            self.battery_low_since = now
-            return
-        if now - self.battery_low_since >= config.BATTERY_LOW_S and self.status in WATCHED and self.hold != "battery":
-            log.warning("배터리 %s%% → 멈춤", self.board.battery)
+        """배터리 평균이 BATTERY_STOP_PCT 이하면 그 자리에서 멈춤"""
+        if self._battery_low(full=True) and self.status in WATCHED and self.hold != "battery":
+            log.warning("배터리 %s%% (최근 %.0f초 평균) → 멈춤", self.battery, config.BATTERY_AVG_S)
             self._safe_halt("battery")
 
     def on_mode(self, msg):

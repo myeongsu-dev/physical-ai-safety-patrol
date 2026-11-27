@@ -27,7 +27,7 @@
 
 | 토픽 | 방향 · 주기 | 내용 |
 |---|---|---|
-| `potent/{로봇}/state` | Pi → 서버, 1초마다 | `marker`(지난 마커), `status`, `role`(받은 순찰 역할, 없으면 `null`), `battery`(%), `sonar_cm`, `temp_c`, `version`(git 커밋), `hold`(다시 걷지 않는 이유, 없으면 `null`) |
+| `potent/{로봇}/state` | Pi → 서버, 1초마다 | `marker`(지난 마커), `status`, `role`(받은 순찰 역할, 없으면 `null`), `battery`(%, 최근 3초 평균), `sonar_cm`, `temp_c`, `version`(git 커밋), `hold`(다시 걷지 않는 이유, 없으면 `null`) |
 | `potent/{로봇}/event` | Pi → 서버, 생길 때 | `type`, `ts`, 값, `conf`(신뢰도), `photo`(사진 주소) |
 | `potent/{로봇}/cmd` | 서버 → Pi | `cmd` + 필요한 값 |
 | `potent/mode` | 서버 → 전체 | `{"mode": "normal"}` · `{"mode": "evacuate"}` |
@@ -36,7 +36,7 @@
 
 이벤트 `type`: `obstacle`(통로 막힘) · `floor_object`(바닥 물건) · `helmet`(안전모 미착용) · `heat`(과열 의심) · `flame`(불꽃)
 
-state `hold`: `stop` · `wait` · `guide`(서버 명령 뒤) · `line` · `link` · `stream` · `board` · `no_ack` · `send`(Pi 안전 정지) · `server`(서버 신호 끊김) · `battery`(배터리 15% 이하) · `not_ready`(걸을 준비 안 됨) · `exit`(Pi 프로그램 종료). `null`이 아니면 Pi는 서버가 `patrol`·`resume`을 보내기 전까지 걷지 않습니다.
+state `hold`: `stop` · `wait` · `guide`(서버 명령 뒤) · `line` · `link` · `stream` · `board` · `no_ack` · `send`(Pi 안전 정지) · `server`(서버 신호 끊김) · `battery`(배터리 3초 평균 15% 이하) · `not_ready`(걸을 준비 안 됨) · `exit`(Pi 프로그램 종료). `null`이 아니면 Pi는 서버가 `patrol`·`resume`을 보내기 전까지 걷지 않습니다.
 
 명령 `cmd`: `patrol`(`role`: `A`·`B`) · `stop` · `resume` · `go`(`zone`) · `wait` · `dock` · `guide`(`arrow`: `left`·`right`·`up`·`x`)
 

@@ -554,25 +554,33 @@ def check_server(spool):
     alive(ag, clock, 1)
     assert ag.mode == "normal"
 
-    # 배터리 15% 이하가 BATTERY_LOW_S 동안 계속되면 그 자리에서 멈춤. 잠깐 떨어진 것은 무시
+    # state battery는 최근 BATTERY_AVG_S 평균: 50%·70%가 번갈아 와도 60% 근처
     ag, dog, th, clock, events, states = make(spool)
-    run(ag, clock, 0.5)
+    for i in range(int(config.BATTERY_AVG_S * 10) + 5):
+        dog.bat = 7400 if i % 2 else 7800
+        run(ag, clock, 0.1)
+    assert 58 <= ag.state()["battery"] <= 62, ag.state()["battery"]
+    assert 58 <= states[-1]["battery"] <= 62   # 실제로 보낸 state도 평균
+
+    # 배터리 평균이 15% 이하면 그 자리에서 멈춤. 잠깐 떨어진 것은 평균에 묻혀 무시
+    dog.bat = 7800
+    run(ag, clock, config.BATTERY_AVG_S + 0.5)
     ag.on_command(protocol.command("patrol"))
     run(ag, clock, 0.5)
     low = 6400 + (config.BATTERY_STOP_PCT - 1) / 100 * 2000   # mV
     dog.bat = low
-    run(ag, clock, config.BATTERY_LOW_S - 1)
+    run(ag, clock, 1.0)
     dog.bat = 7800
     run(ag, clock, 0.5)
     assert ag.status == "patrol"
     dog.bat = low
-    run(ag, clock, config.BATTERY_LOW_S + 0.5)
+    run(ag, clock, config.BATTERY_AVG_S + 0.5)
     assert ag.status == "idle" and ag.hold == "battery" and ag.state()["battery"] <= config.BATTERY_STOP_PCT
     ag.on_command(protocol.command("patrol"))   # 배터리가 그대로면 patrol도 안 됨
     run(ag, clock, 0.3)
     assert ag.status == "idle" and ag.hold == "battery"
     dog.bat = 7800
-    run(ag, clock, 0.3)
+    run(ag, clock, config.BATTERY_AVG_S + 0.5)
     ag.on_command(protocol.command("patrol"))
     run(ag, clock, 0.3)
     assert ag.status == "patrol" and ag.hold is None
