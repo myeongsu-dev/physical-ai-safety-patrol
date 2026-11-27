@@ -40,8 +40,8 @@ const ROBOT_STATUS_TEXT = {
 };
 
 // 경보 종류 → 화면 말과 색.
-// flame은 로봇 한 대가 과열을 다시 재다가 불꽃까지 본 것(edge/agent.py). 화재는 서버가 교차 확인으로
-// 확정하고 대피 모드로 바꿀 때만 띄우므로, flame 경보는 "불꽃 감지"로 보여 준다
+// flame은 로봇이 카메라로 불꽃을 본 것(edge/agent.py). 화면에는 "불꽃 감지"로 보여 준다.
+// 화재는 관리자가 사진이나 현장을 보고 불꽃 감지 팝업의 "화재 확정" 버튼으로 정한다 (대피 모드로 바꿈)
 const ALERT_TEXT = {
   flame: ["불꽃 감지", "fire"],
   heat: ["과열", "fire"],
@@ -52,9 +52,14 @@ const ALERT_TEXT = {
 
 // 경보 알림 방식 (README "경보", 관리자 화면)
 //   통로 차단 · 밟힘 주의 · 과열 · 불꽃 감지: 팝업 + 경보음 (종류별 소리, js/sound.js)
+//   불꽃 감지 소리와 대피 소리는 "경보음 끄기" 상태여도 난다 (FORCE_SOUND)
 //   화재(대피 모드): 맨 위 빨간 띠 + 경보음 반복. 관리자가 "경보음 멈춤"을 누르거나 대피가 풀리면 멈춤
 // 기본 화면은 새 경보에 팝업 · 경보음이 없고, 요약 칸이나 최근 경보를 누를 때만 위치 팝업
 const POPUP_TYPES = ["obstacle", "floor_object", "heat", "flame"];
+const FORCE_SOUND = ["flame", "evacuate"];
+function playAlarm(type) {
+  return alarm.play(type, { force: FORCE_SOUND.includes(type) });
+}
 const FIRE_REPEAT_MS = 3000;
 // 화면을 연 직후 서버가 보내는 첫 묶음(이미 있던 경보)은 새 경보로 치지 않는다
 const SNAPSHOT_MS = 500;
@@ -70,14 +75,13 @@ function render() {
 
   renderClock(now);
 
-  // 서버
-  setItem("server", serverOpen ? "ok" : s.server === "closed" ? "bad" : "", STATUS_TEXT[s.server]);
-
-  // 로봇 "3/4대". 서버가 끊겨 있으면 로봇 상태를 알 수 없다
+  // 서버 · 로봇 연결 한 줄. 모두 정상이면 "연결 정상 · 로봇 4/4", 아니면 무엇이 문제인지 빨강
+  // 서버가 끊겨 있으면 로봇 상태를 알 수 없다
   if (serverOpen) {
-    setItem("robots", s.online === s.total ? "ok" : "bad", `${s.online}/${s.total}대`);
+    const allOn = s.online === s.total;
+    setItem("conn-status", allOn ? "ok" : "bad", allOn ? `연결 정상 · 로봇 ${s.online}/${s.total}` : `로봇 끊김 · ${s.online}/${s.total}`);
   } else {
-    setItem("robots", "", `-/${s.total}대`);
+    setItem("conn-status", s.server === "closed" ? "bad" : "", s.server === "closed" ? "서버 끊김" : "서버 연결 중");
   }
 
   // 알림 줄
@@ -364,12 +368,39 @@ function renderAlerts() {
 
 // ---------- 경보 이력 (관리자 화면) ----------
 // 지난 경보는 서버에서 꺼내 온다 (GET /events, PR #23). 처음에 PAST_PAGE건을 받아 정탐률을 세고,
-// 표에는 SHOW_STEP건씩 보여 준다. "더 보기"로 다 보면 서버에서 그 앞의 PAST_PAGE건을 더 받는다
+// 표는 종류 버튼으로 거르고 PER_PAGE건씩 쪽 번호로 넘긴다. 받은 것의 마지막 쪽에서 서버에 더 있으면
+// "이전 기록 더 받기"로 그 앞의 PAST_PAGE건을 받는다
 const PAST_PAGE = 500; // 서버가 한 번에 주는 최대 건수
-const SHOW_STEP = 50;
+const PER_PAGE = 10; // 경보 이력 · 안전모 기록 한 쪽에 보이는 건수
 // status: idle · loading · done · none(GET /events가 없는 예전 서버) · error
-const past = { status: "idle", more: false, shown: SHOW_STEP, error: null };
+const past = { status: "idle", more: false, error: null };
+const hist = { type: "all", page: 0 }; // 경보 이력: 거른 종류, 보고 있는 쪽
+const HIST_TYPES = [["all", "전체"], ["obstacle", "통로 차단"], ["floor_object", "밟힘 주의"], ["heat", "과열"], ["flame", "불꽃 감지"]];
 let historyKey = "";
+
+// 쪽 번호 (경보 이력 · 안전모 기록). attr: 누를 때 쓰는 data 이름. 첫 쪽, 끝 쪽, 지금 쪽 앞뒤만 번호, 나머지는 …
+function pagerHtml(total, page, attr) {
+  const pages = Math.max(1, Math.ceil(total / PER_PAGE));
+  const nums = [];
+  for (let i = 0; i < pages; i++) {
+    if (i === 0 || i === pages - 1 || Math.abs(i - page) <= 1) nums.push(i);
+    else if (nums[nums.length - 1] !== "gap") nums.push("gap");
+  }
+  const btns = nums.map((n) => n === "gap"
+    ? `<span class="pg-gap">…</span>`
+    : `<button type="button" class="pg${n === page ? " on" : ""}" data-${attr}="${n}"${n === page ? ' aria-current="page"' : ""}>${n + 1}</button>`).join("");
+  const from = total ? page * PER_PAGE + 1 : 0;
+  return `<nav class="pager" aria-label="쪽">
+    <button type="button" class="pg" data-${attr}="${page - 1}"${page === 0 ? " disabled" : ""}>이전</button>${btns}
+    <button type="button" class="pg" data-${attr}="${page + 1}"${page >= pages - 1 ? " disabled" : ""}>다음</button>
+    <span class="pg-info muted">${total}건 중 ${from}–${Math.min(total, (page + 1) * PER_PAGE)}</span>
+  </nav>`;
+}
+
+// 쪽 번호가 범위를 넘지 않게
+function clampPage(page, total) {
+  return Math.min(Math.max(0, page), Math.max(0, Math.ceil(total / PER_PAGE) - 1));
+}
 
 async function loadPast(before = null) {
   if (past.status === "loading") return;
@@ -397,32 +428,35 @@ async function loadPast(before = null) {
   }
 }
 
-// 표에 더 보여 준다. 화면에 있는 것을 다 보여 줬고 서버에 더 있으면 그 앞을 받아 온다
-function showMore() {
-  past.shown += SHOW_STEP;
+// 받은 것보다 앞의 지난 경보를 서버에서 더 받는다
+function loadOlder() {
   const all = alertHistory(store, Infinity);
-  if (past.shown > all.length && past.more) loadPast(Math.min(...all.map((h) => h.event.id)));
-  render();
+  if (past.more && all.length) loadPast(Math.min(...all.map((h) => h.event.id)));
 }
 
 function renderHistory() {
   const all = alertHistory(store, Infinity);
-  const list = all.slice(0, past.shown);
-  const canMore = all.length > past.shown || past.more;
+  const rows = hist.type === "all" ? all : all.filter((h) => h.event.type === hist.type);
+  hist.page = clampPage(hist.page, rows.length);
+  const list = rows.slice(hist.page * PER_PAGE, (hist.page + 1) * PER_PAGE);
+  const lastPage = (hist.page + 1) * PER_PAGE >= rows.length;
+  const counts = HIST_TYPES.map(([t]) => (t === "all" ? all.length : all.filter((h) => h.event.type === t).length));
   const key = list.map((h) => `${h.event.id}${h.event.checked ? (h.event.false_alarm ? "f" : "c") : ""}`).join(",") +
-    `|${past.status}|${canMore}|${past.error ?? ""}`;
+    `|${hist.type}|${hist.page}|${rows.length}|${counts}|${past.status}|${past.more}|${past.error ?? ""}`;
   if (key === historyKey) return;
   historyKey = key;
+  document.getElementById("history-tools").innerHTML = HIST_TYPES.map(([t, label], i) =>
+    `<button type="button" class="chip${hist.type === t ? " on" : ""}" data-htype="${t}" aria-pressed="${hist.type === t}">${label} <span>${counts[i]}</span></button>`).join("");
   document.getElementById("history").innerHTML = list.length
     ? list.map(historyRow).join("")
-    : `<tr><td colspan="7" class="empty">${past.status === "loading" ? "지난 경보를 받는 중" : "아직 받은 경보가 없습니다"}</td></tr>`;
+    : `<tr><td colspan="7" class="empty">${past.status === "loading" ? "지난 경보를 받는 중" : all.length ? "이 종류의 경보가 없습니다" : "아직 받은 경보가 없습니다"}</td></tr>`;
   document.getElementById("history-sub").textContent = past.status === "none"
     ? "이 화면을 연 뒤에 받은 경보 (서버가 지난 경보를 주지 않음)"
     : "서버에 기록된 경보, 최근 것부터";
-  let more = "";
+  let more = rows.length > 0 ? pagerHtml(rows.length, hist.page, "hpage") : "";
   if (past.error) more += `<p class="error">${esc(past.error)}</p> <button type="button" class="more-btn" data-past-retry="1">다시 받기</button>`;
-  else if (past.status === "loading" && list.length) more += `<span class="muted">받는 중</span>`;
-  else if (canMore) more += `<button type="button" class="more-btn" data-more="1">더 보기</button>`;
+  else if (past.status === "loading" && all.length) more += `<span class="muted">받는 중</span>`;
+  else if (past.more && lastPage) more += `<button type="button" class="more-btn" data-more="1">이전 기록 더 받기</button>`;
   document.getElementById("history-more").innerHTML = more;
 }
 
@@ -442,11 +476,13 @@ function renderStats() {
   <p class="stat-note">정탐은 "경보 해제", 오탐은 "오탐"으로 해제한 것. 해제 전 경보와 로봇이 놓친 위험은 세지 않습니다. 경보 이력에 받아 온 경보 기준</p>`;
 }
 
-// 안전모 미착용 기록: 오늘 · 전체 건수, 자주 나온 위치, 최근 기록. 사진은 보여 주지 않는다
+// 안전모 미착용 기록: 오늘 · 전체 건수, 자주 나온 위치, 기록 10건씩 쪽 번호. 줄을 누르면 사진과 위치
 let helmetKey = "";
+let helmetPage = 0;
 function renderHelmet(now) {
-  const h = helmetLog(store, now);
-  const key = JSON.stringify([h, new Date(now).toDateString()]);
+  const h = helmetLog(store, now, Infinity);
+  helmetPage = clampPage(helmetPage, h.recent.length);
+  const key = JSON.stringify([h, helmetPage, new Date(now).toDateString()]);
   if (key === helmetKey) return;
   helmetKey = key;
   const el = document.getElementById("helmet");
@@ -457,11 +493,12 @@ function renderHelmet(now) {
   const top = h.byMarker.slice(0, 3).map((m) => `마커 ${esc(m.marker)} ${m.count}건`).join(", ");
   el.innerHTML = `<p class="helmet-count"><b>오늘 ${h.today}건</b> <span class="muted">받아 온 기록 ${h.total}건</span></p>
     ${top ? `<p class="helmet-where"><span class="muted">자주 나온 위치</span> ${top}</p>` : ""}
-    <p class="helmet-hint muted">최근 ${h.recent.length}건. 누르면 사진과 위치</p>
-    <ul class="helmet-list">${h.recent.map((e) => `<li><button type="button" class="helmet-btn" data-alert="${e.id}">
+    <p class="helmet-hint muted">최근 것부터. 누르면 사진과 위치</p>
+    <ul class="helmet-list">${h.recent.slice(helmetPage * PER_PAGE, (helmetPage + 1) * PER_PAGE).map((e) => `<li><button type="button" class="helmet-btn" data-alert="${e.id}">
       <span>${e.ts ? whenText(e.ts) : "-"}</span><span>${e.marker != null ? `마커 ${esc(e.marker)}` : "-"}</span>
       <span class="muted">${esc(robotLabel(e.robot))}</span><span class="helmet-photo${e.photo ? "" : " none"}">${e.photo ? "사진" : "사진 없음"}</span>
-    </button></li>`).join("")}</ul>`;
+    </button></li>`).join("")}</ul>
+    ${h.recent.length > PER_PAGE ? pagerHtml(h.recent.length, helmetPage, "mpage") : ""}`;
 }
 
 // 경보 시각: 오늘이면 시:분:초, 아니면 월.일 시:분
@@ -498,7 +535,7 @@ const evac = { confirming: false, pending: false, error: null };
 let evacKey = "";
 
 function renderEvacActions(evacuate) {
-  const ringing = evacuate && evacAlarm.ringing && alarm.enabled;
+  const ringing = evacuate && evacAlarm.ringing;
   const key = JSON.stringify([evacuate, evac, ringing]);
   if (key === evacKey) return;
   evacKey = key;
@@ -570,6 +607,57 @@ function closedText(e) {
 // 팝업의 경보 해제 버튼 두 개 (관리자 화면)
 //   경보 해제: 실제로 일어난 일이고 현장 조치를 확인함 (정탐)
 //   오탐: 로봇이 잘못 본 것. 서버에 오탐으로 기록해 나중에 모델을 고칠 때 쓴다
+// 불꽃 감지 팝업에만: 관리자가 사진이나 현장을 보고 화재로 확정하면 대피 모드로 바꾼다.
+// POST /mode {"mode": "evacuate", "fire": 마커}. 누르기 전에 팝업 안에서 한 번 더 묻는다.
+// fire는 서버가 지도에 불난 곳을 그리고 대피 길에서 빼는 데 쓴다 (서버가 받도록 부탁함. 안 받아도 대피 모드는 됨)
+const fireConfirm = { asking: null, pending: false, error: null }; // asking: 묻고 있는 경보 id
+
+function fireHtml(e) {
+  if (e.type !== "flame") return "";
+  if (store.mode === "evacuate") return `<p class="fire-done">대피 모드입니다 (화재 확정됨)</p>`;
+  const err = fireConfirm.error ? `<p class="error">${esc(fireConfirm.error)}</p>` : "";
+  if (fireConfirm.pending) return `<div class="fire-row"><button type="button" class="fire-btn" disabled>보내는 중</button></div>${err}`;
+  if (fireConfirm.asking === e.id) {
+    return `<div class="fire-row asking">
+      <p class="fire-ask">사진이나 현장에서 불을 확인했나요? 화재로 확정하면 대피 모드가 되어 모든 화면에 대피 안내가 나가고, 로봇이 대피 안내를 합니다.</p>
+      <button type="button" class="fire-btn" data-fire="${e.id}" data-sure="1">화재 확정 (대피 모드)</button>
+      <button type="button" class="check" data-fire-cancel="1">취소</button>
+    </div>${err}`;
+  }
+  return `<div class="fire-row"><button type="button" class="fire-btn" data-fire="${e.id}">화재 확정 (대피 모드)</button></div>${err}`;
+}
+
+async function confirmFire(id, sure) {
+  if (fireConfirm.pending) return;
+  if (!sure) {
+    fireConfirm.asking = id;
+    fireConfirm.error = null;
+    render();
+    return;
+  }
+  const e = store.history.get(id)?.event;
+  fireConfirm.pending = true;
+  fireConfirm.error = null;
+  render();
+  try {
+    const body = { mode: "evacuate" };
+    if (e && e.marker != null) body.fire = e.marker;
+    const res = await adminRequest("/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`서버 응답 ${res.status}`);
+    apply(store, { kind: "mode", mode: (await res.json()).mode });
+    fireConfirm.asking = null;
+  } catch (err) {
+    fireConfirm.error = `화재 확정을 보내지 못했습니다 (${err.message})`;
+  } finally {
+    fireConfirm.pending = false;
+    render();
+  }
+}
+
 function actionHtml(e) {
   if (release.pending === e.id) {
     return `<div class="check-row"><button type="button" class="check" disabled>보내는 중</button></div>`;
@@ -604,7 +692,7 @@ function noticeEvent(msg, now = Date.now()) {
   const first = alertState.openedAt == null || now - alertState.openedAt < SNAPSHOT_MS;
   if (first) return; // 화면을 열 때 이미 있던 경보
   if (POPUP_TYPES.includes(msg.type)) alertState.queue.push(msg.id);
-  alarm.play(msg.type);
+  playAlarm(msg.type);
 }
 
 // 서버 메시지가 올 때마다 부른다. 평상시 → 대피로 바뀌면 대피 경보음
@@ -618,7 +706,7 @@ function noticeMode(msg, prevMode, now = Date.now()) {
   const first = alertState.openedAt == null || now - alertState.openedAt < SNAPSHOT_MS;
   if (first) return; // 화면을 열 때 이미 대피 중이었음
   evacAlarm.ringing = true;
-  alarm.play("evacuate");
+  playAlarm("evacuate");
 }
 
 function currentPopup() {
@@ -658,7 +746,7 @@ function popupFields(e) {
 function renderPopup() {
   const e = currentPopup();
   const wrap = document.getElementById("popup");
-  const key = JSON.stringify([e?.id, e?.checked, e?.false_alarm, alertState.view, alertState.queue.length, release.pending, release.error]);
+  const key = JSON.stringify([fireConfirm, store.mode, e?.id, e?.checked, e?.false_alarm, alertState.view, alertState.queue.length, release.pending, release.error]);
   syncEvacRepeat();
   if (key === popupKey) return;
   popupKey = key;
@@ -686,7 +774,7 @@ function renderPopup() {
     // 값은 사진 · 지도 아래 한 줄로 (오른쪽 좁은 칸에 넣으면 지도가 작아짐)
     body = `<div class="popup-body">${photo}<div class="popup-side">${mapSide}</div></div>${popupFields(e)}`;
     if (e.type === "helmet") actions = `<p class="done-text">현장에서 음성으로 안내함 (경보 해제 없음)</p>`;
-    else actions = e.checked ? `<p class="done-text">${closedText(e)}</p>` : actionHtml(e) + errorHtml(e);
+    else actions = fireHtml(e) + (e.checked ? `<p class="done-text">${closedText(e)}</p>` : actionHtml(e) + errorHtml(e));
   } else {
     body = `<div class="popup-body where-only"><div class="popup-side">${mapSide}</div></div>`;
   }
@@ -708,8 +796,8 @@ function renderPopup() {
 // 대피 중이고 관리자가 멈추지 않았으면 경보음을 반복한다
 function syncEvacRepeat() {
   if (store.mode !== "evacuate") evacAlarm.ringing = false;
-  const want = evacAlarm.ringing && alarm.enabled;
-  if (want && !evacAlarm.timer) evacAlarm.timer = setInterval(() => alarm.play("evacuate"), FIRE_REPEAT_MS);
+  const want = evacAlarm.ringing; // 경보음을 꺼 둬도 대피 소리는 반복 ("경보음 멈춤"으로만 멈춤)
+  if (want && !evacAlarm.timer) evacAlarm.timer = setInterval(() => playAlarm("evacuate"), FIRE_REPEAT_MS);
   if (!want && evacAlarm.timer) {
     clearInterval(evacAlarm.timer);
     evacAlarm.timer = null;
@@ -723,22 +811,29 @@ function closePopup() {
   render();
 }
 
+// 경보음 버튼: 스피커 아이콘. 꺼져 있으면 사선. 글(켜기 · 끄기)은 화면 읽기와 마우스를 올렸을 때
+const SPEAKER = '<path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/>';
+const WAVES = '<path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+const SLASH = '<path d="M3 3l18 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>';
+function setSoundButton(b, text, on) {
+  b.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">${SPEAKER}${on ? WAVES : SLASH}</svg><span class="sr-only">${text}</span>`;
+  b.title = text;
+  b.className = "icon-btn sound-btn" + (on ? "" : " off");
+}
 function renderSoundButton() {
   const b = document.getElementById("sound");
   if (!alarm.supported) {
-    b.textContent = "경보음 지원 안 됨";
+    setSoundButton(b, "경보음 지원 안 됨", false);
     b.disabled = true;
     return;
   }
   if (alarm.blocked) {
     // 켰는데도 브라우저가 소리를 막고 있음. 다시 누르면 끄기, 한 번 더 누르면 다시 시도
-    b.textContent = "경보음 막힘 (브라우저 설정 확인)";
-    b.className = "sound-btn off";
+    setSoundButton(b, "경보음 막힘 (브라우저 설정 확인)", false);
     b.setAttribute("aria-pressed", "true");
     return;
   }
-  b.textContent = alarm.enabled ? "경보음 끄기" : "경보음 켜기";
-  b.className = "sound-btn" + (alarm.enabled ? "" : " off");
+  setSoundButton(b, alarm.enabled ? "경보음 끄기" : "경보음 켜기 (불꽃 감지 · 대피 소리는 꺼져 있어도 남)", alarm.enabled);
   b.setAttribute("aria-pressed", String(alarm.enabled));
 }
 
@@ -788,7 +883,7 @@ function closeViewer() {
 
 function onClick(ev) {
   const t = ev.target.closest?.(
-    "[data-alert], [data-check], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel], [data-evac-mute], [data-photo], [data-viewer-close], [data-more], [data-past-retry], [data-kpi], [data-pick], [data-tab], [data-resume]",
+    "[data-alert], [data-check], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel], [data-evac-mute], [data-photo], [data-viewer-close], [data-more], [data-past-retry], [data-hpage], [data-htype], [data-mpage], [data-kpi], [data-pick], [data-tab], [data-resume], [data-fire], [data-fire-cancel]",
   );
   // 경보 칸 목록 밖을 누르면 목록을 닫는다
   if (!t?.dataset.kpi && !ev.target.closest?.("#kpi-pick")) closePick();
@@ -799,6 +894,11 @@ function onClick(ev) {
     openPopup(Number(t.dataset.pick));
   } else if (t.dataset.tab) {
     setTab(t.dataset.tab);
+  } else if (t.dataset.fire) {
+    confirmFire(Number(t.dataset.fire), t.dataset.sure === "1");
+  } else if (t.dataset.fireCancel) {
+    fireConfirm.asking = null;
+    render();
   } else if (t.dataset.resume) {
     resumeRobot(t.dataset.resume);
   } else if (t.dataset.photo) {
@@ -806,8 +906,18 @@ function onClick(ev) {
     openViewer(t.dataset.photo);
   } else if (t.dataset.viewerClose) {
     closeViewer();
+  } else if (t.dataset.hpage != null) {
+    hist.page = Number(t.dataset.hpage);
+    render();
+  } else if (t.dataset.htype) {
+    hist.type = t.dataset.htype;
+    hist.page = 0;
+    render();
+  } else if (t.dataset.mpage != null) {
+    helmetPage = Number(t.dataset.mpage);
+    render();
   } else if (t.dataset.more) {
-    showMore();
+    loadOlder();
   } else if (t.dataset.pastRetry) {
     const all = alertHistory(store, Infinity);
     loadPast(past.more && all.length ? Math.min(...all.map((h) => h.event.id)) : null);
@@ -913,7 +1023,7 @@ async function askPassword(message) {
   const input = document.getElementById("login-password");
   const errEl = document.getElementById("login-error");
   const btn = document.getElementById("login-btn");
-  // 기본 화면으로: 주소에서 admin만 뺀다 (?fake 등은 그대로)
+  // 기본모드: 주소에서 admin만 뺀다 (?fake 등은 그대로)
   const q = new URLSearchParams(location.search);
   q.delete("admin");
   const qs = q.toString().replace(/=(&|$)/g, "$1");
@@ -952,7 +1062,7 @@ const mapEl = document.getElementById("map");
 mapEl.setAttribute("viewBox", VIEWBOX);
 mapEl.innerHTML = baseMap('<g class="fire"></g><g class="guides"></g>') + '<g class="robots"></g>';
 document.getElementById("legend").innerHTML = legendHtml({ robots: admin });
-// 위 막대의 화면 바꾸기 버튼: 기본 화면이면 "관리자 화면", 관리자 화면이면 "기본 화면으로".
+// 위 막대의 화면 바꾸기 버튼: 기본 화면이면 "관리자모드", 관리자 화면이면 "기본모드".
 // 주소의 다른 값(?fake 등)은 그대로 둔다. 관리자 화면에서 나가면 비밀번호도 지워 다음에 다시 묻는다
 {
   const q = new URLSearchParams(location.search);
@@ -961,7 +1071,7 @@ document.getElementById("legend").innerHTML = legendHtml({ robots: admin });
   const qs = q.toString().replace(/=(&|$)/g, "$1");
   const sw = document.getElementById("view-switch");
   sw.href = "./" + (qs ? "?" + qs : "");
-  sw.textContent = admin ? "기본 화면으로" : "관리자 화면";
+  sw.textContent = admin ? "기본모드" : "관리자모드";
   if (admin) sw.onclick = () => savePassword("");
 }
 // 관리자 화면은 비밀번호가 맞을 때까지 열지 않는다 (서버가 잠그지 않았으면 바로 열림)
@@ -980,6 +1090,9 @@ if (admin) {
 }
 // 누르기 · Esc는 두 화면 모두 (기본 화면에는 경보 해제 · 대피 해제 버튼이 없어서 누를 수 있는 것은 경보 보기뿐)
 document.addEventListener("click", onClick);
+// 불꽃 감지 · 대피 소리는 경보음을 꺼 둬도 나야 하므로, 화면을 누르거나 키를 칠 때마다 소리 장치를 깨워 둔다
+document.addEventListener("pointerdown", () => alarm.unlock());
+document.addEventListener("keydown", () => alarm.unlock());
 document.addEventListener("keydown", (ev) => {
   if (ev.key !== "Escape") return;
   closePick();

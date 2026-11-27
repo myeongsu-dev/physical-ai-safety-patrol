@@ -361,7 +361,9 @@ export class FakeServer {
     }
     if (path === "/mode" && method === "POST") {
       if (!MODES.includes(body.mode)) return jsonResponse(400, { detail: "모르는 모드: " + body.mode });
-      this.setMode(body.mode);
+      // fire: 관리자가 불꽃 감지 팝업에서 화재로 확정한 마커 (서버에 받아 달라고 부탁한 값)
+      const fire = body.mode === "evacuate" && Number.isInteger(body.fire) && body.fire in MARKERS ? body.fire : null;
+      this.setMode(body.mode, fire);
       return jsonResponse(200, { mode: this.mode });
     }
     if (path === "/status" && method === "GET") {
