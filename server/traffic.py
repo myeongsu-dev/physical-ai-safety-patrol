@@ -144,6 +144,12 @@ class Traffic:
     def on_state(self, robot, active=True):
         """state를 받을 때마다. 마커가 바뀌었을 때만 판단한다. active=False(대피 중)면 위치만 기억."""
         s = self.fleet.robots.get(robot, {})
+        if self.kind(robot) in ("dock", "go") and s.get("status") == "idle" and s.get("hold") is None:
+            # Pi는 도착하면 idle로 멈춤. 다시 켜져도 idle. 어느 쪽이든 더는 가는 중이 아님
+            # (교통 정리로 세운 로봇은 hold=wait이라 여기 안 옴)
+            self.intent.pop(robot, None)
+            if s.get("marker") in (map_config.DOCK_MARKER, None):
+                self.lanes = {l: o for l, o in self.lanes.items() if o != robot}
         marker = s.get("marker")
         if marker not in map_config.MARKERS or marker == self.cur.get(robot):
             return []
@@ -192,6 +198,10 @@ class Traffic:
         if cmd in MOVES and robot in self.cur:
             return self._plan(robot)
         return []
+
+    def busy(self):
+        """서버가 도크 · 출동 지점으로 보내 아직 도착 안 한 로봇 (자동 출발 대상에서 뺌)"""
+        return {r for r, m in self.intent.items() if m.get("cmd") in ("dock", "go")}
 
     def can_depart(self):
         """도크 길이 비어 출발시켜도 되나"""
@@ -291,7 +301,15 @@ if __name__ == "__main__":
     t.note_command("B", protocol.command("stop"))
     assert "B" not in t.waiting and t.tick() == []
 
-    # 6) 설정을 바꾸면 그대로 따름: 배터리 먼저로 바꾸면 순찰 중이어도 배터리 낮은 쪽이 먼저
+    # 6) 도크로 가다 Pi가 idle(정지 이유 없음)을 보내면 = 도착 · 다시 켜짐 → 가는 중 기록을 지움. hold=wait이면 그대로
+    t = fresh(); f.roles.update({"A": "A"})
+    t.note_command("A", protocol.command("dock"))
+    f.update_state("A", {"marker": None, "status": "idle", "hold": "wait", "battery": 70}); t.on_state("A")
+    assert t.busy() == {"A"}
+    f.update_state("A", {"marker": None, "status": "idle", "hold": None, "battery": 70}); t.on_state("A")
+    assert t.busy() == set()
+
+    # 7) 설정을 바꾸면 그대로 따름: 배터리 먼저로 바꾸면 순찰 중이어도 배터리 낮은 쪽이 먼저
     saved = map_config.TIE_BREAK
     map_config.TIE_BREAK = ("battery", "name")
     t = fresh()
