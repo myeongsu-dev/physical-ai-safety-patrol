@@ -32,6 +32,15 @@ Pi가 state에 hold(정지 이유: stop · line · board · no_ack ...)를 보�
 hold는 Pi가 patrol · resume을 받아야 풀리니, 사람이 POST /robots/…로 직접 보내야 다시 나간다.
 
 state 메시지의 online이 false면 연결 끊김 (ONLINE_SEC초 넘게 state 없음). 끊길 때 한 번, 다시 붙을 때 다시 보낸다.
+
+연결 끊김 (#39, 값은 fleet.py):
+- 서버는 1초마다 ALIVE_TOPIC(potent/server/alive)에 {"ts", "mode"}를 보낸다 (retain 안 함: 서버가 죽으면 끊겨야 함).
+  로봇은 이게 ROBOT_LOST_S(5초) 안 오면 다음 마커까지 가서 멈추고 hold "server"를 보낸다.
+- 서버는 ONLINE_SEC(7초) 넘게 state가 없으면 끊김으로 보고, 그 로봇의 지금 · 다음 마커를 막고 역할을 비우지 않는다.
+- CALL_HUMAN_SEC(30초) 안에 다시 붙으면: 위치를 확인하고 길이 비면 한 대씩(RESUME_GAP_S 간격) resume.
+- 30초 넘게 끊기면 사람 호출: 대시보드에 {"kind": "link_alert", "robot", "marker", "stop_marker", "online", "active": true}.
+  이 로봇은 다시 붙어도 자동으로 출발시키지 않는다. 관리자가 가서 보고 POST /robots/…/cmd resume을 보내 hold가
+  풀리면 {"active": false}로 경보를 내린다. state 메시지에도 "call_human": true/false.
 | / | dashboard/ 폴더 (index.html이 생기면) |
 """
 import argparse
@@ -52,7 +61,7 @@ from fastapi.staticfiles import StaticFiles
 from common import protocol
 from server import dispatch, map_config
 from server.events import EventLog, HeatCheck
-from server.fleet import ONLINE_SEC, Fleet
+from server.fleet import ALIVE_TOPIC, CALL_HUMAN_SEC, ONLINE_SEC, Fleet
 from server.traffic import Traffic
 
 log = logging.getLogger("server")
@@ -61,6 +70,8 @@ ROOT = Path(__file__).resolve().parent.parent
 PHOTO_DIR = Path(__file__).resolve().parent / "photos"
 DB_PATH = Path(__file__).resolve().parent / "events.sqlite3"
 DASHBOARD_DIR = ROOT / "dashboard"
+RESUME_GAP_S = 3        # 다시 붙은 로봇을 출발시킬 때 한 대씩, 이 간격으로
+RESUME_RETRY_S = 10     # resume을 보냈는데도 hold server로 서 있으면 이만큼 뒤에 다시 시도
 PHOTO_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,80}\.(jpg|jpeg|png)$")
 
 
@@ -102,6 +113,11 @@ class Server:
         self.admin_password = admin_password or None   # 없으면 잠그지 않음
         self.fleet = Fleet(clock=clock)
         self.linked = {}    # 로봇 → 지난번에 본 연결 상태 (끊김·다시 붙음을 화면에 알리려고)
+        self.alerts = {}    # 로봇 → 사람 호출 경보 (CALL_HUMAN_SEC 넘게 끊김)
+        self.need_human = set()   # 오래 끊겼다 다시 붙은 로봇: 사람이 resume할 때까지 자동 출발 안 함
+        self.rejoined = {}  # 로봇 → 다시 붙어 resume을 보낸 시각
+        self.last_rejoin = -1e9
+        self.alive = None   # 마지막으로 보낸 살아 있다는 신호
         self.events = EventLog(str(db_path))
         self.heat = HeatCheck(self.fleet)
         self.traffic = Traffic(self.fleet)   # 교통 정리 (같은 마커 · 도크 길에서 부딪히지 않게)
@@ -162,6 +178,9 @@ class Server:
             return
         if kind == "state":
             with self.lock:
+                old = self.fleet.robots.get(robot)
+                if old and self.clock() - old["seen"] > CALL_HUMAN_SEC and self.fleet.in_field(robot):
+                    self.need_human.add(robot)
                 self.fleet.update_state(robot, msg)
                 self.send_traffic(self.traffic.on_state(robot, active=self.mode == "normal"))
             if self.linked.get(robot) is False:
@@ -181,14 +200,18 @@ class Server:
                     self.apply(self.heat.on_heat(robot, msg))
 
     def tick(self):
-        """1초마다: 연결 끊긴 로봇 알리기, 교차 확인 시간 끝난 것 해제"""
+        """1초마다: 살아 있다는 신호, 연결 끊긴 로봇 알리기 · 다시 출발, 교차 확인 시간 끝난 것 해제"""
+        self.send_alive()
         for robot in list(self.fleet.robots):
             if self.linked.get(robot) and not self.fleet.online(robot):
                 self.linked[robot] = False
                 log.warning("%s 연결 끊김 (%d초 넘게 state 없음)", robot, ONLINE_SEC)
                 self.hub.push(self.state_msg(robot))
+            self.update_alert(robot)
         with self.lock:
             self.apply(self.heat.tick())
+            if self.mode == "normal":
+                self.rejoin()
             if self.mode == "normal":
                 self.send_traffic(self.traffic.tick(exclude=self.heat.busy()))
             if self.auto_start and self.mode == "normal" and self.traffic.can_depart():
@@ -199,6 +222,47 @@ class Server:
                     self.publish(topic, msg, own=True)
                     log.info("자동 출발 %s 역할 %s", robot, msg["role"])
                     self.send_traffic(self.traffic.departed(robot))
+
+    def send_alive(self):
+        """살아 있다는 신호. retain 안 함 (서버가 죽으면 로봇이 바로 알아야 함). 시험용(mqtt=False)은 sent에 안 쌓고 따로"""
+        self.alive = {"ts": round(self.clock(), 1), "mode": self.mode}
+        if self.client:
+            self.client.publish(ALIVE_TOPIC, protocol.pack(self.alive), qos=0, retain=False)
+
+    def update_alert(self, robot):
+        """CALL_HUMAN_SEC 넘게 끊긴 로봇은 사람 호출. 다시 붙어 사람이 resume해 hold가 풀리면 내림"""
+        s = self.fleet.robots[robot]
+        long_lost = self.fleet.lost(robot) and self.clock() - s["seen"] > CALL_HUMAN_SEC
+        need = long_lost or (robot in self.need_human and s.get("hold") == "server")
+        if need and robot not in self.alerts:
+            nxt = self.traffic.next_marker(robot)
+            self.alerts[robot] = {"kind": "link_alert", "robot": robot, "marker": s.get("marker"),
+                                  "stop_marker": nxt if nxt is not None else s.get("marker"),
+                                  "online": self.fleet.online(robot), "active": True}
+            log.warning("%s %d초 넘게 끊김 → 사람 호출 (마커 %s 근처)", robot, CALL_HUMAN_SEC,
+                        self.alerts[robot]["stop_marker"])
+            self.hub.push(self.alerts[robot])
+        elif not need and robot in self.alerts and self.fleet.online(robot):
+            self.need_human.discard(robot)
+            log.info("%s 사람 호출 해제", robot)
+            self.hub.push({**self.alerts.pop(robot), "online": True, "active": False})
+
+    def rejoin(self):
+        """연결이 끊겨 섰다가(hold server) 다시 붙은 로봇을 한 대씩 다시 출발. 오래 끊겼던 로봇은 사람이 직접"""
+        now = self.clock()
+        if now - self.last_rejoin < RESUME_GAP_S:
+            return
+        for robot in sorted(self.fleet.robots):
+            s = self.fleet.robots[robot]
+            if not self.fleet.online(robot) or s.get("hold") != "server" or not self.fleet.in_field(robot) \
+                    or robot in self.need_human or robot in self.heat.busy() \
+                    or now - self.rejoined.get(robot, -1e9) < RESUME_RETRY_S:
+                continue
+            cmds = self.traffic.rejoin(robot)
+            if cmds:
+                self.rejoined[robot] = self.last_rejoin = now
+                self.send_traffic(cmds)
+                return
 
     def apply(self, actions):
         """HeatCheck가 돌려준 할 일 실행"""
@@ -213,13 +277,14 @@ class Server:
         s = {k: v for k, v in self.fleet.robots[robot].items() if k != "seen"}
         return {"kind": "state", "robot": robot, **s,
                 "role": self.fleet.role_of(robot) or s.get("role"),
-                "online": self.fleet.online(robot),
+                "online": self.fleet.online(robot), "call_human": robot in self.alerts,
                 "seen_ago": round(self.clock() - self.fleet.robots[robot]["seen"], 1)}
 
     def snapshot(self):
         return ([self.state_msg(r) for r in sorted(self.fleet.robots)]
                 + [{"kind": "mode", "mode": self.mode}]
                 + ([self.evac] if self.evac else [])
+                + list(self.alerts.values())
                 + self.events.open_events())
 
     def send_all(self, pairs):
@@ -565,6 +630,53 @@ def selfcheck():
                 docked = True
                 break
         assert docked and srv.traffic.can_depart() and "A" not in srv.traffic.intent, (bot.marker, srv.traffic.lanes)
+        # 연결 끊김 (#39): 1초마다 살아 있다는 신호, 끊긴 로봇 마커 막기, 30초 안에 다시 붙으면 한 대씩 resume
+        now[0] += 100
+        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0], auto_start=False)
+
+        def st(robot, marker, status="patrol", hold=None, role=None):
+            srv.on_mqtt(f"potent/{robot}/state", protocol.pack(
+                {"marker": marker, "status": status, "battery": 80, "hold": hold, "role": role or robot}))
+        srv.fleet.roles.update({"A": "A", "B": "B"})
+        srv.tick()
+        assert srv.alive == {"ts": round(now[0], 1), "mode": "normal"}
+        st("A", 14); st("A", 13)                               # A: 13, 다음 12
+        st("B", 8); st("B", 7)                                 # B: 7, 다음 6
+        now[0] += ONLINE_SEC + 1                               # 둘 다 조용 → 끊김
+        srv.tick()
+        assert not srv.fleet.online("A") and srv.fleet.lost("A") and not srv.alerts
+        # 둘 다 서서(hold server) 다시 붙음: 한 대씩 resume
+        st("A", 12, "idle", "server"); st("B", 6, "idle", "server")
+        srv.sent.clear(); srv.tick()
+        assert [t for t, m in srv.sent if m.get("cmd") == "resume"] == ["potent/A/cmd"], srv.sent
+        now[0] += 1; srv.sent.clear(); srv.tick()
+        assert not [m for _, m in srv.sent if m.get("cmd") == "resume"]   # 간격 RESUME_GAP_S
+        now[0] += RESUME_GAP_S; st("A", 12, "patrol"); st("B", 6, "idle", "server")
+        srv.sent.clear(); srv.tick()
+        assert [t for t, m in srv.sent if m.get("cmd") == "resume"] == ["potent/B/cmd"], srv.sent
+        # 30초 넘게 끊김: 사람 호출 경보 (화면 · 처음 붙는 화면 · state), 다시 붙어도 자동 출발 안 함
+        st("B", 5)
+        now[0] += CALL_HUMAN_SEC + 1
+        st("A", 11)
+        srv.tick()
+        al = srv.alerts["B"]
+        assert al["kind"] == "link_alert" and al["active"] and al["marker"] == 5 and al["stop_marker"] == 1, al
+        assert al in srv.snapshot() and srv.state_msg("B")["call_human"] is True
+        st("B", 1, "idle", "server")
+        now[0] += RESUME_RETRY_S + RESUME_GAP_S; st("A", 11); st("B", 1, "idle", "server")
+        srv.sent.clear(); srv.tick()
+        assert not [m for _, m in srv.sent if m.get("cmd") == "resume"] and "B" in srv.alerts
+        # 관리자가 가서 보고 resume → hold 풀림 → 경보 내림
+        srv.publish("potent/B/cmd", protocol.command("resume"))
+        st("B", 1, "patrol"); srv.tick()
+        assert "B" not in srv.alerts and "B" not in srv.need_human
+        # 끊긴 로봇에 보낸 명령은 예약을 지우지 않음
+        now[0] += ONLINE_SEC + 1; st("B", 2)
+        srv.tick()
+        r = dict(srv.traffic.reserved)
+        srv.publish("potent/A/cmd", protocol.command("stop"))
+        assert {m: v for m, v in srv.traffic.reserved.items() if v["robot"] == "A"} == \
+               {m: v for m, v in r.items() if v["robot"] == "A"}
         # 관리자 잠금: 비밀번호를 정하면 경보 닫기·출발·명령·모드는 맞는 헤더가 있어야 함
         srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, admin_password="pw1234", auto_start=False)
         with TestClient(create_app(srv)) as c:
