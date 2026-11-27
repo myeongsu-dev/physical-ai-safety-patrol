@@ -27,13 +27,16 @@
 
 | 토픽 | 방향 · 주기 | 내용 |
 |---|---|---|
-| `potent/{로봇}/state` | Pi → 서버, 1초마다 | `marker`(지난 마커), `status`, `role`(받은 순찰 역할, 없으면 `null`), `battery`(%), `sonar_cm`, `temp_c`, `version`(git 커밋) |
+| `potent/{로봇}/state` | Pi → 서버, 1초마다 | `marker`(지난 마커), `status`, `role`(받은 순찰 역할, 없으면 `null`), `battery`(%, 최근 3초 평균), `sonar_cm`, `temp_c`, `version`(git 커밋), `hold`(다시 걷지 않는 이유, 없으면 `null`) |
 | `potent/{로봇}/event` | Pi → 서버, 생길 때 | `type`, `ts`, 값, `conf`(신뢰도), `photo`(사진 주소) |
 | `potent/{로봇}/cmd` | 서버 → Pi | `cmd` + 필요한 값 |
 | `potent/mode` | 서버 → 전체 | `{"mode": "normal"}` · `{"mode": "evacuate"}` |
+| `potent/server/alive` | 서버 → 전체, 1초마다 (retain 없음) | `{"ts": 1763343312, "mode": "normal"}`. 서버가 살아 있다는 신호 (`ALIVE_TOPIC`) |
 | 사진 | Pi → 서버, HTTP | `POST /photos`로 올리고 받은 주소를 이벤트의 `photo`에 넣음 |
 
 이벤트 `type`: `obstacle`(통로 막힘) · `floor_object`(바닥 물건) · `helmet`(안전모 미착용) · `heat`(과열 의심) · `flame`(불꽃)
+
+state `hold`: `stop` · `wait` · `guide`(서버 명령 뒤) · `line` · `link` · `stream` · `board` · `no_ack` · `send`(Pi 안전 정지) · `server`(서버 신호 끊김) · `battery`(배터리 3초 평균 15% 이하) · `not_ready`(걸을 준비 안 됨) · `exit`(Pi 프로그램 종료). `null`이 아니면 Pi는 서버가 `patrol`·`resume`을 보내기 전까지 걷지 않습니다.
 
 명령 `cmd`: `patrol`(`role`: `A`·`B`) · `stop` · `resume` · `go`(`zone`) · `wait` · `dock` · `guide`(`arrow`: `left`·`right`·`up`·`x`)
 
@@ -52,6 +55,8 @@
 **순찰 역할(`role`)**: 서버가 출발시킬 때 `patrol` 명령에 `role`로 동선을 정해 줍니다. `A`는 바깥 큰 고리, `B`는 안쪽 길을 포함한 고리입니다(마커 순서는 `server/map_config.py`). 로봇 이름(`ROBOT_ID`)과 역할은 별개라서, 어느 로봇이든 A나 B를 맡을 수 있습니다. Pi는 받은 역할을 기억해 `state`의 `role`로 알리고, 역할에 맞는 갈림길 동작을 합니다. 역할 없이 온 `patrol`은 지난 역할을 이어 갑니다.
 
 서버가 끊긴 동안 Pi는 이벤트를 쌓아 두었다가 다시 붙으면 보냅니다.
+
+**서버 신호 끊김(단독 모드)**: Pi는 `potent/server/alive`가 5초 안 오면 걷던 중이면 다음 마커까지 가서 멈추고 `hold: "server"`로 알립니다 (다음 마커가 20초 안에 안 나오면 그 자리에서 멈춤). 막힘·과열 확인 중이었으면 끝나도 걷지 않습니다. 신호가 다시 와도 스스로 걷지 않고 서버의 `resume`·`patrol`을 기다립니다. 신호를 한 번도 받지 못한 Pi(예전 서버)는 이 감시를 하지 않습니다. 신호의 `mode`가 Pi의 모드와 다르면 Pi는 그 모드로 맞춥니다.
 
 ## 3. 서버 ↔ 대시보드
 
