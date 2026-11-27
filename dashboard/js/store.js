@@ -48,6 +48,9 @@ export function setServer(store, status, now = Date.now()) {
 export function apply(store, msg, now = Date.now()) {
   if (msg.kind === "state") {
     store.robots[msg.robot] = msg;
+    // 사람 호출 띠는 active:false로 내리지만, 대시보드가 끊긴 사이에 풀렸거나 서버가 다시 켜지면
+    // 그 메시지를 못 받는다. state의 call_human이 false면 띠도 내린다 (칸이 없으면 그대로 둠)
+    if (msg.call_human === false) delete store.linkAlerts[msg.robot];
     if (msg.online === false) {
       // 서버가 끊겼다고 알려 준 경우: 화면을 새로 열 때의 첫 묶음, 또는 5초 넘게 state가 안 와서
       // 서버가 한 번 보내 주는 알림 (server/link-status). 이 state의 다른 값은 마지막으로 받은 것

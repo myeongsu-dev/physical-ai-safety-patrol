@@ -370,9 +370,13 @@ async function bootApp(search, tag, { login } = {}) {
     });
   const timers = [];
   let onClick = null;
+  const onPointer = [];
   globalThis.document = {
     getElementById: el,
-    addEventListener: (type, fn) => { if (type === "click") onClick = fn; },
+    addEventListener: (type, fn) => {
+      if (type === "click") onClick = fn;
+      if (type === "pointerdown") onPointer.push(fn);
+    },
   };
   globalThis.location = { search, protocol: "http:", host: "localhost" };
   globalThis.window = globalThis;
@@ -391,6 +395,8 @@ async function bootApp(search, tag, { login } = {}) {
       await tickWait();
     },
     hasClick: () => onClick !== null,
+    // 화면을 한 번 누름 (브라우저가 소리를 허락하는 때)
+    pointer: () => onPointer.forEach((fn) => fn({})),
     stop: () => {
       fakeServer.stop();
       timers.forEach(clearInterval);
@@ -1205,6 +1211,7 @@ class FakeAudioContext {
 
 // ---------- 불꽃 감지 팝업에서 화재 확정 → 대피 모드, 불난 곳은 그 경보의 마커 ----------
 {
+  globalThis.AudioContext = FakeAudioContext;
   const app = await bootApp("?fake&admin", "fireconfirm");
   const { el, fake } = app;
   await tickWait(550);
@@ -1230,6 +1237,45 @@ class FakeAudioContext {
   await tickWait();
   assert.equal(fake.mode, "evacuate", "마커가 이상해도 대피는 됨");
   assert.equal(fake.evac.fire, null);
+
+  // 화재 확정 응답이 WebSocket mode보다 먼저 와도(여기서는 mode가 아예 안 옴) 누른 화면에서 대피 소리
+  await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
+  await tickWait();
+  await app.click({ popupClose: "1" });
+  app.pointer(); // 경보음은 꺼 둔 채로, 누른 적만 있음
+  const realPush = fake._push.bind(fake);
+  fake._push = (m) => { if (m.kind !== "mode" && m.kind !== "evac") realPush(m); };
+  const fl2 = fake.emit("flame", "A");
+  await tickWait();
+  beeps = 0;
+  await app.click({ fire: String(fl2.id), sure: "1" });
+  assert.equal(fake.mode, "evacuate");
+  assert.ok(beeps > 0, "응답만 받아도 대피 소리");
+  assert.match(el("evacuate-actions").innerHTML, /data-evac-mute="1"/);
+  fake._push = realPush;
+  await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
+  await tickWait();
+  await app.click({ popupClose: "1" });
+
+  // 보내기 실패 문구는 팝업을 닫으면 지움
+  const realFetch = fake.fetch.bind(fake);
+  fake.fetch = async (path, opts) => (path === "/mode" ? new Response("{}", { status: 500 }) : realFetch(path, opts));
+  const fl3 = fake.emit("flame", "A");
+  await tickWait();
+  await app.click({ alert: String(fl3.id) });
+  await app.click({ fire: String(fl3.id), sure: "1" });
+  assert.match(el("popup").innerHTML, /화재 확정을 보내지 못했습니다/);
+  fake.fetch = realFetch;
+  await app.click({ popupClose: "1" });
+  await app.click({ alert: String(fl3.id) });
+  assert.ok(!el("popup").innerHTML.includes("보내지 못했습니다"), "닫았다 열면 지난 오류 없음");
+
+  // 해제한(오탐) 불꽃 감지를 경보 이력에서 열면 화재 확정 버튼 없음
+  await app.click({ check: String(fl3.id), falseAlarm: "1" });
+  await tickWait();
+  await app.click({ pick: String(fl3.id) });
+  assert.match(el("popup").innerHTML, /불꽃 감지/);
+  assert.ok(!el("popup").innerHTML.includes("data-fire="), "해제한 경보에는 화재 확정 버튼 없음");
   app.stop();
 }
 
@@ -1244,6 +1290,12 @@ class FakeAudioContext {
   assert.equal(linkAlertText(linkAlertList(st)[1]), "MD-1 연결 끊김, 마커 9로 가 주세요", "멈출 마커를 모르면 마지막 마커");
   apply(st, { kind: "link_alert", robot: "B", marker: 3, stop_marker: 1, online: true, active: false }, 3000);
   assert.deepEqual(linkAlertList(st).map((a) => a.robot), ["A"], "active false면 내림");
+  apply(st, { kind: "state", robot: "A", status: "idle", marker: 9, hold: "server" }, 3500);
+  assert.deepEqual(linkAlertList(st).map((a) => a.robot), ["A"], "call_human 칸이 없으면 그대로");
+  apply(st, { kind: "state", robot: "A", status: "idle", marker: 9, hold: "server", call_human: true }, 3600);
+  assert.equal(linkAlertList(st).length, 1);
+  apply(st, { kind: "state", robot: "A", status: "patrol", marker: 9, hold: null, call_human: false }, 3700);
+  assert.equal(linkAlertList(st).length, 0, "active:false를 못 받아도 state call_human false면 내림");
   assert.equal(HOLD_TEXT.server, "서버 연결 끊김으로 정지");
   assert.deepEqual(robotStop({ status: "idle", marker: 1, hold: "server" }), { hold: "server", reason: "서버 연결 끊김으로 정지" });
 
@@ -1267,6 +1319,22 @@ class FakeAudioContext {
   await tickWait();
   assert.equal(el("link-alerts").hidden, true);
   assert.ok(!el("robot-list").innerHTML.includes("사람 호출 중"));
+
+  // 대시보드가 끊긴 사이에 풀린 경우: active:false는 못 받고 state(call_human false)만 옴
+  fake.linkLost("B", 1);
+  await tickWait();
+  assert.equal(el("link-alerts").hidden, false);
+  fake.robots.B.callHuman = false;
+  delete fake.linkAlerts.B;
+  fake._push(fake._stateMsg(fake.robots.B));
+  await tickWait();
+  assert.equal(el("link-alerts").hidden, true, "state call_human false로 띠 내림");
+
+  // stop_marker를 모르면 "마커 5로 가 주세요"만 (같은 마커를 괄호로 또 쓰지 않음)
+  fake._push({ kind: "link_alert", robot: "B", marker: 5, stop_marker: null, online: false, active: true });
+  await tickWait();
+  assert.match(el("link-alerts").innerHTML, /마커 5로 가 주세요/);
+  assert.ok(!el("link-alerts").innerHTML.includes("마지막으로 본 마커"));
   app.stop();
 
   // 기본 화면에도 띠 (경보음은 없음). 화면을 열 때 이미 떠 있던 사람 호출도 보임

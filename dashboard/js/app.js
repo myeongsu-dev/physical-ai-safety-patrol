@@ -617,7 +617,7 @@ function closedText(e) {
 const fireConfirm = { asking: null, pending: false, error: null }; // asking: 묻고 있는 경보 id
 
 function fireHtml(e) {
-  if (e.type !== "flame") return "";
+  if (e.type !== "flame" || e.checked) return ""; // 해제한(오탐 포함) 지난 경보에는 버튼 없음
   if (store.mode === "evacuate") return `<p class="fire-done">대피 모드입니다 (화재 확정됨)</p>`;
   const err = fireConfirm.error ? `<p class="error">${esc(fireConfirm.error)}</p>` : "";
   if (fireConfirm.pending) return `<div class="fire-row"><button type="button" class="fire-btn" disabled>보내는 중</button></div>${err}`;
@@ -655,7 +655,13 @@ async function confirmFire(id, sure) {
     let res = await send(fire != null ? { mode: "evacuate", fire } : { mode: "evacuate" });
     if (res.status === 400 && fire != null) res = await send({ mode: "evacuate" });
     if (!res.ok) throw new Error(`서버 응답 ${res.status}`);
+    const prevMode = store.mode;
     apply(store, { kind: "mode", mode: (await res.json()).mode });
+    // 응답이 WebSocket mode보다 먼저 오면 noticeMode가 바뀐 것을 못 보므로 여기서 울린다
+    if (prevMode !== "evacuate" && store.mode === "evacuate") {
+      evacAlarm.ringing = true;
+      playAlarm("evacuate");
+    }
     fireConfirm.asking = null;
   } catch (err) {
     fireConfirm.error = `화재 확정을 보내지 못했습니다 (${err.message})`;
@@ -718,7 +724,7 @@ function renderLinkAlerts() {
   const el = document.getElementById("link-alerts");
   el.hidden = !list.length;
   el.innerHTML = list.map((a) => `<p><b>사람 호출</b> ${esc(linkAlertText(a))}${
-    Number.isInteger(a.marker) && a.marker !== a.stop_marker ? ` <span class="muted">(마지막으로 본 마커 ${esc(a.marker)})</span>` : ""}</p>`).join("");
+    Number.isInteger(a.marker) && Number.isInteger(a.stop_marker) && a.marker !== a.stop_marker ? ` <span class="muted">(마지막으로 본 마커 ${esc(a.marker)})</span>` : ""}</p>`).join("");
 }
 
 // 서버 메시지가 올 때마다 부른다. 평상시 → 대피로 바뀌면 대피 경보음
@@ -832,6 +838,8 @@ function syncEvacRepeat() {
 
 // 눌러서 연 팝업이면 그것만 닫고, 저절로 뜬 팝업이면 다음 대기 팝업으로
 function closePopup() {
+  fireConfirm.asking = null;
+  fireConfirm.error = null;
   if (alertState.view != null) alertState.view = null;
   else alertState.queue.shift();
   render();

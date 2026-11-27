@@ -200,7 +200,7 @@
   - 지난 경보와 정탐률: `http://localhost:8080/?fake&admin&past`로 열면 가짜 서버에 지난 경보 40건(닫힘, 일부 오탐)을 넣어 둡니다
   - 관리자 잠금: `http://localhost:8080/?fake&admin&lock`으로 열면 가짜 서버도 잠깁니다. 비밀번호는 `1234`. 콘솔에서 `fake.adminPassword = "5678"`로 바꾸면 비밀번호가 바뀐 경우를 볼 수 있습니다
   - 진짜 서버는 끊긴 로봇의 state를 더 보내지 않습니다. 로봇 연결 끊김은 화면이 마지막 state를 받은 시각으로 판단해야 합니다 (7초, `store.js` `ONLINE_SEC` = `server/fleet.py`)
-  - 사람 호출 (이슈 #39): 로봇이 서버와 끊기면 단독 모드로 다음 마커까지 가서 멈춥니다(`hold: "server"`, 카드에 "서버 연결 끊김으로 정지"). 서버가 `{"kind": "link_alert", "robot", "marker", "stop_marker", "online", "active"}`를 보내면 `active`가 true일 때 띠를 띄우고 false면 내립니다. 갈 곳은 `stop_marker`, 모르면 `marker`. state의 `call_human`이 true면 로봇 카드에 "사람 호출 중"
+  - 사람 호출 (이슈 #39): 로봇이 서버와 끊기면 단독 모드로 다음 마커까지 가서 멈춥니다(`hold: "server"`, 카드에 "서버 연결 끊김으로 정지"). 서버가 `{"kind": "link_alert", "robot", "marker", "stop_marker", "online", "active"}`를 보내면 `active`가 true일 때 띠를 띄우고 false면 내립니다. 갈 곳은 `stop_marker`, 모르면 `marker`. state의 `call_human`이 true면 로봇 카드에 "사람 호출 중", false면 띠도 내립니다 (대시보드가 끊긴 사이에 풀렸거나 서버가 다시 켜져 `active:false`를 못 받은 경우)
   - 가짜 서버: 콘솔에서 `fake.linkLost("B", 1)`(B가 끊겨 1번에서 멈춤), 내리기는 `fake.linkBack("B")`
 - 셀프 체크: `node dashboard/selfcheck.mjs`. 지도 데이터 [js/mapdata.js](js/mapdata.js)가 `server/map_config.py`와 같은지, 가짜 서버가 진짜 서버와 같은 순서·모양으로 보내는지 봅니다. CI가 `check.sh`로 돌립니다
 - 서버와 같이: `python -m server.fake_robots`와 `python -m server.api`를 켜고 브라우저로 엽니다
