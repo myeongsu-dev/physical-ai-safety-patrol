@@ -8,7 +8,7 @@ export const ROBOTS = ["A", "B", "C", "D"];
 
 // 화면에 보이는 로봇 이름. 서버·Pi와 주고받는 이름(ROBOT_ID)은 A~D 그대로 두고 화면에서만 바꾼다.
 // 팀 공통 이름으로 정함 (README "화면 용어")
-export const ROBOT_LABEL = { A: "MD1", B: "MD2", C: "MD3", D: "MD4" };
+export const ROBOT_LABEL = { A: "MD-1", B: "MD-2", C: "MD-3", D: "MD-4" };
 
 export function robotLabel(name) {
   return ROBOT_LABEL[name] ?? String(name);

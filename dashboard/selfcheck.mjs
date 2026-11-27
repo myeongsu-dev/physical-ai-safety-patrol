@@ -252,8 +252,8 @@ assert.equal(robotPlace({ marker: 8, status: "patrol", role: "A" }), "A 경로 �
 assert.equal(robotPlace({ marker: 15, status: "idle", role: null }), "충전 스테이션");
 assert.equal(robotPlace({ marker: 14, status: "dock" }), "마커 14");
 assert.equal(robotPlace(undefined), "-");
-// 화면 이름: A~D → MD1~MD4, 모르는 이름은 그대로
-assert.deepEqual(["A", "B", "C", "D", "E"].map(robotLabel), ["MD1", "MD2", "MD3", "MD4", "E"]);
+// 화면 이름: A~D → MD-1~MD-4, 모르는 이름은 그대로
+assert.deepEqual(["A", "B", "C", "D", "E"].map(robotLabel), ["MD-1", "MD-2", "MD-3", "MD-4", "E"]);
 assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(Number)); // 지도 마커 번호 = map_config 번호
 {
   const svg = robotLayer([
@@ -468,7 +468,7 @@ async function bootApp(search, tag, { login } = {}) {
   // 로봇 현황 카드 4대
   assert.equal(el("robot-panel").hidden, false);
   assert.equal((el("robot-list").innerHTML.match(/<li /g) || []).length, 4);
-  for (const n of ["MD1", "MD2", "MD3", "MD4"]) assert.ok(el("robot-list").innerHTML.includes(`>${n}</span>`));
+  for (const n of ["MD-1", "MD-2", "MD-3", "MD-4"]) assert.ok(el("robot-list").innerHTML.includes(`>${n}</span>`));
   // 로봇 카드 맨 아래 프로그램 버전 (가짜 로봇은 "fake")
   assert.equal((el("robot-list").innerHTML.match(/<div class="version">버전 fake<\/div>/g) || []).length, 4);
 
@@ -503,7 +503,7 @@ async function bootApp(search, tag, { login } = {}) {
   assert.match(d, /사진 없음/); // 가짜 로봇은 사진이 없다
   assert.match(d, new RegExp(`data-check="${ob.id}"`));
   assert.match(d, /<dt>사람<\/dt>/);
-  assert.match(d, /<dt>로봇<\/dt><dd>MD1<\/dd>/);
+  assert.match(d, /<dt>로봇<\/dt><dd>MD-1<\/dd>/);
   assert.match(d, /닫기 \(위 요약 칸이나 최근 경보를 누르면 다시 볼 수 있음\)/);
   await app.click({ popupClose: "1" });
   assert.equal(el("popup").hidden, true);
@@ -560,7 +560,7 @@ async function bootApp(search, tag, { login } = {}) {
 
   // 지도에 로봇 위치 (화면 이름으로)
   assert.equal((el("map .robots").innerHTML.match(/class="robot"/g) || []).length, 4);
-  assert.ok(el("map .robots").innerHTML.includes(">MD1</text>"));
+  assert.ok(el("map .robots").innerHTML.includes(">MD-1</text>"));
   app.stop();
 }
 
@@ -996,8 +996,8 @@ class FakeAudioContext {
   assert.deepEqual(robotStop({ status: "idle", marker: 7, hold: "new_one" }), { hold: "new_one", reason: "new_one" }, "모르는 이유는 그대로");
 
   // 지도: 멈춘 로봇은 주황 테두리
-  assert.ok(robotLayer([{ name: "MD1", marker: 7, online: true, stopped: true }]).includes("#ff9f1a"));
-  assert.ok(!robotLayer([{ name: "MD1", marker: 7, online: true, stopped: false }]).includes("#ff9f1a"));
+  assert.ok(robotLayer([{ name: "MD-1", marker: 7, online: true, stopped: true }]).includes("#ff9f1a"));
+  assert.ok(!robotLayer([{ name: "MD-1", marker: 7, online: true, stopped: false }]).includes("#ff9f1a"));
 
   // 화면: 로봇 카드 "멈춤" + 현장 확인 필요, hold가 오면 이유. 안전 현황은 그대로
   const app = await bootApp("?fake&admin", "halt");
@@ -1007,7 +1007,7 @@ class FakeAudioContext {
   fake.robots.A.marker = 7;
   fake.halt("A");
   await tickWait();
-  const card = () => el("robot-list").innerHTML.split("<li").find((x) => x.includes(">MD1<"));
+  const card = () => el("robot-list").innerHTML.split("<li").find((x) => x.includes(">MD-1<"));
   assert.match(card(), /class="ok stopped"/);
   assert.match(card(), /<span class="state">멈춤<\/span>/);
   assert.match(card(), /현장 확인 필요/);
@@ -1023,7 +1023,7 @@ class FakeAudioContext {
 
   // 충전 스테이션에 있어도 hold가 있으면 멈춤 (서버가 자동 출발시키지 않음), 요약 줄은 "확인 필요"로
   const kpiN = (label) => Number(el("kpis").innerHTML.match(new RegExp(`<span class="kpi-label">${label}</span><b>(\\d+)</b>`))[1]);
-  const cardD = () => el("robot-list").innerHTML.split("<li").find((x) => x.includes(">MD4<"));
+  const cardD = () => el("robot-list").innerHTML.split("<li").find((x) => x.includes(">MD-4<"));
   const dockBefore = kpiN("충전 스테이션");
   const checkBefore = kpiN("확인 필요");
   fake.halt("D", "stop");
@@ -1054,7 +1054,7 @@ class FakeAudioContext {
   fake.robots.B.marker = 7;
   fake.halt("B", "wait");
   await tickWait();
-  const cardB = el("robot-list").innerHTML.split("<li").find((x) => x.includes(">MD2<"));
+  const cardB = el("robot-list").innerHTML.split("<li").find((x) => x.includes(">MD-2<"));
   assert.match(cardB, /교차 확인 대기/);
   assert.ok(!cardB.includes("data-resume"));
   // 못 보내면 카드에 알림 (가짜 서버가 모르는 로봇 → 404)
@@ -1101,7 +1101,7 @@ class FakeAudioContext {
   await tickWait();
   assert.match(el("helmet").innerHTML, /<b>오늘 1건<\/b>/);
   assert.match(el("helmet").innerHTML, /마커 7 1건/);
-  assert.match(el("helmet").innerHTML, />MD1</);
+  assert.match(el("helmet").innerHTML, />MD-1</);
   assert.match(el("helmet").innerHTML, new RegExp(`data-alert="${hm.id}"`));
   assert.match(el("helmet").innerHTML, /<span class="helmet-photo">사진<\/span>/);
   assert.ok(!el("alerts").innerHTML.includes(`data-alert="${hm.id}"`));
