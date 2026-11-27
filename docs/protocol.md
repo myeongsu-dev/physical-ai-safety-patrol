@@ -35,7 +35,7 @@
 
 이벤트 `type`: `obstacle`(통로 막힘) · `floor_object`(바닥 물건) · `helmet`(안전모 미착용) · `heat`(과열 의심) · `flame`(불꽃)
 
-명령 `cmd`: `patrol`(`role`: `A`·`B`) · `stop` · `resume` · `go`(`zone`) · `wait` · `dock` · `guide`(`arrow`: `left`·`right`·`up`·`x`)
+명령 `cmd`: `patrol`(`role`: `A`·`B`) · `stop` · `resume` · `go`(`zone`) · `wait` · `dock` · `guide`(`arrow`: `left`·`right`·`up`·`down`·`x`)
 
 ```json
 // potent/B/event

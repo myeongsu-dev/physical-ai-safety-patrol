@@ -256,7 +256,8 @@ assert cmd("L", "text", "Hi") == "CMD|L|ok|$" and sent[:2] == ["tube clear", "tu
 assert cmd("L", "blink", 1).startswith("CMD|!|L|")
 # LED 화살표: Pi의 guide 명령 (L|arrow|left), 모르는 방향은 오류
 assert cmd("L", "arrow", "left") == "CMD|L|ok|$" and "tube <" in sent
-assert cmd("L", "arrow", "down").startswith("CMD|!|L|")
+assert cmd("L", "arrow", "down") == "CMD|L|ok|$" and "tube v" in sent
+assert cmd("L", "arrow", "back").startswith("CMD|!|L|")
 assert cmd("L", "clear") == "CMD|L|ok|$"
 # 음성: A|번호|볼륨, 볼륨은 0~30으로 자름
 assert cmd("A", 1, 99) == "CMD|A|ok|$" and "vol 30" in sent and "track 1" in sent

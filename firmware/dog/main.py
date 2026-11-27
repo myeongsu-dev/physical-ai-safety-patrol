@@ -10,7 +10,7 @@ import time
 import Hiwonder_IIC
 from HW_MechDog import MechDog
 
-VERSION = "dog-1.18.2"  # 올리는 규칙은 README "버전". upload.py가 올릴 때 뒤에 +해시를 붙임
+VERSION = "dog-1.19.0"  # 올리는 규칙은 README "버전". upload.py가 올릴 때 뒤에 +해시를 붙임
 MAX_MS = 15000   # 이동 명령 한 번의 최대 시간
 QUIET_MS = 2000  # Pi가 이만큼 조용하면 정지 + LED 오류
 # 걸음: 발 드는 시간 · 딛는 시간(ms) · 다리 드는 높이 (공식 예제 change_gait_parameter.py 값). 켤 때 넣고, G로 바꿀 수 있음.
@@ -211,7 +211,7 @@ def c_gait(lift, touch, height):
     dog.set_gait_params(int(lift), int(touch), int(height))
 
 
-ARROWS = {"left": "<", "right": ">", "up": "^", "x": "X"}
+ARROWS = {"left": "<", "right": ">", "up": "^", "down": "v", "x": "X"}  # down: 뒤로 돌아가라 (서버 대피 안내)
 
 
 def c_led(mode, value=""):
