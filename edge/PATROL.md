@@ -25,7 +25,7 @@ AI 모델 · 머리 카메라 · 온도 센서 없이 합니다.
 
 ## Pi가 스스로 멈추는 경우 (안전 정지)
 
-멈춘 뒤에는 **서버가 `resume`이나 `patrol`을 보낼 때까지 다시 걷지 않습니다.** state는 `idle`입니다.
+멈춘 뒤에는 **서버가 `resume`이나 `patrol`을 보낼 때까지 다시 걷지 않습니다.** state는 `idle`이고, state의 `hold`에 아래 이유가 실립니다 (서버 `stop`·`wait`·`guide` 뒤에는 그 명령 이름, 정지 이유가 없으면 `null`).
 
 | 이유 (기록의 `안전 정지 (…)`) | 언제 |
 |---|---|
@@ -149,5 +149,5 @@ Invoke-RestMethod -Method Post "http://localhost:8000/robots/A/cmd" -ContentType
 ## 다른 파트에 전할 것
 
 - **보드 (firmware/dog)**: ① `F` 중 선을 놓치면(-1) 직진함 → 보드에서도 일정 시간 넘게 -1이면 멈추고 `CMD|E|t|lost|1|$`를 보내 주면 Pi보다 빠름 (지금은 Pi가 1초 뒤 멈춤). ② 2초 감시로 멈출 때 알림이 없음 → `CMD|E|t|halt|quiet|$` 같은 알림이 있으면 Pi가 바로 압니다 (지금은 Pi가 포트 다시 열림·2초 넘게 못 보냄으로 짐작). ③ 배터리 값 단위 (Pi는 mV로 보고 6.4~8.4V → %). ④ 실기에서 쓸 보폭·각도 값을 시험 도구 결과(`tools/mechdog-test/results/`)로 남겨 주면 `PATROL_STRIDE`·`PATROL_ANGLE` 기본값을 맞춥니다.
-- **서버**: state의 `status`는 보드가 `F`에 ok 한 뒤에만 `patrol`입니다. 안전 정지는 `idle`로 보이고 이유는 Pi 기록에만 있습니다 (state에 이유를 넣으려면 `docs/protocol.md`를 함께 바꿔야 함). cmd는 retain 없이 보내 주세요 (보관된 cmd는 Pi가 버림).
+- **서버**: state의 `status`는 보드가 `F`에 ok 한 뒤에만 `patrol`입니다. 안전 정지는 `idle`로 보이고 이유는 state의 `hold`에 있습니다 (`null`이면 정지 이유 없음 → 서버가 자동 출발시켜도 됨). cmd는 retain 없이 보내 주세요 (보관된 cmd는 Pi가 버림).
 - **공통 약속**: 바꾼 것 없음 (`common/protocol.py`, `docs/protocol.md` 그대로).

@@ -159,7 +159,8 @@ class Agent:
         """potent/{로봇}/state 내용 (docs/protocol.md 2절). 걷는 상태는 보드가 F에 ok 한 뒤에만 알림"""
         status = self.status if self.status not in MOVING or self.acked else "idle"
         return {"marker": self.marker, "status": status, "role": self.role, "battery": self.board.battery,
-                "sonar_cm": self.board.sonar_cm, "temp_c": self.temp_c, "version": self.version}
+                "sonar_cm": self.board.sonar_cm, "temp_c": self.temp_c, "version": self.version,
+                "hold": self.hold}   # 다시 걷지 않는 이유 (없으면 None → null). 서버는 이것이 None일 때만 자동 출발
 
     # ---------- 움직임 ----------
     def _move(self, force=False):
