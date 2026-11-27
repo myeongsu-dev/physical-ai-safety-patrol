@@ -15,54 +15,17 @@
 Server(api.py)가 부르는 것: on_state(로봇) · tick() · note_command(로봇, 명령) · can_depart() · departed(로봇) · reset()
 모두 보낼 명령 목록 [(로봇, 명령 dict)]을 돌려준다 (can_depart는 True/False).
 """
-import heapq
 import logging
 
 from common import protocol
-from server import map_config
+from server import map_config, route
 
 log = logging.getLogger("server.traffic")
 
 MOVES = ("patrol", "go", "dock")   # 서버가 걷게 하는 명령
 
 
-def _transitions():
-    """역할 → {(지난 마커, 지금 마커): 다음 마커}. B는 같은 마커를 두 번 지나서 지난 마커로 구분한다."""
-    out = {}
-    for role, r in map_config.ROUTES.items():
-        loop = r["loop"]
-        seq = [None] + r["entry"] + loop + loop[:2]
-        t = {}
-        for a, b, c in zip(seq, seq[1:], seq[2:]):
-            t.setdefault((a, b), c)
-        out[role] = t
-    return out
-
-
-def shortest_path(start, goal, avoid=()):
-    """마커 start → goal 최단 경로 [start, ..., goal]. 길이 없으면 []"""
-    from server.dispatch import _dist, edges
-    nb = edges()
-    dist, prev, heap = {start: 0.0}, {}, [(0.0, start)]
-    while heap:
-        d, m = heapq.heappop(heap)
-        if m == goal:
-            break
-        if d > dist.get(m, 1e18):
-            continue
-        for n in sorted(nb[m]):
-            if n in avoid:
-                continue
-            nd = d + _dist(m, n)
-            if nd < dist.get(n, 1e18):
-                dist[n], prev[n] = nd, m
-                heapq.heappush(heap, (nd, n))
-    if goal not in dist:
-        return []
-    path = [goal]
-    while path[-1] != start:
-        path.append(prev[path[-1]])
-    return path[::-1]
+shortest_path = route.shortest_path   # 예전 이름 (fake_robots 등)
 
 
 def lane_of(a, b):
@@ -80,7 +43,6 @@ class Traffic:
     def __init__(self, fleet, clock=None):
         self.fleet = fleet
         self.clock = clock or fleet.clock
-        self.trans = _transitions()
         self.cur = {}       # 로봇 → 지금(마지막으로 찍은) 마커
         self.prev = {}      # 로봇 → 그 전 마커
         self.intent = {}    # 로봇 → 서버가 마지막으로 보낸 걷기 명령 (patrol · go · dock)
@@ -101,22 +63,10 @@ class Traffic:
         return tuple(keys[k] for k in map_config.TIE_BREAK)
 
     def next_marker(self, robot):
-        """동선상 다음 마커 (모르면 None)"""
-        cur = self.cur.get(robot)
-        if cur is None:
-            return None
-        k = self.kind(robot)
-        if k in ("go", "dock"):
-            goal = map_config.DOCK_MARKER if k == "dock" else self.intent[robot].get("zone")
-            path = shortest_path(cur, goal) if goal in map_config.MARKERS else []
-            return path[1] if len(path) > 1 else None
+        """동선상 다음 마커 (모르면 None). 계산은 route.next_marker (Pi가 갈림길 방향을 정할 때와 같은 것)"""
         role = self.fleet.role_of(robot) or self.fleet.robots.get(robot, {}).get("role")
-        t = self.trans.get(role, {})
-        nxt = t.get((self.prev.get(robot), cur))
-        if nxt is None:   # 지난 마커를 모를 때: 이 마커에서 갈 수 있는 곳이 하나뿐이면 그것
-            options = {c for (a, b), c in t.items() if b == cur}
-            nxt = options.pop() if len(options) == 1 else None
-        return nxt
+        return route.next_marker(role, self.prev.get(robot), self.cur.get(robot), self.kind(robot),
+                                 self.intent.get(robot, {}).get("zone"))
 
     def blocked_by(self, robot, marker):
         """robot이 marker로 가면 안 되는 이유가 되는 로봇 (없으면 None)"""

@@ -16,6 +16,7 @@ import time
 
 from common import protocol
 from server import map_config
+from server.route import shortest_path
 
 log = logging.getLogger("fake")
 
@@ -86,8 +87,8 @@ class FakeRobot:
             if self.target not in map_config.MARKERS:
                 log.warning("%s: 모르는 구역 %s", self.name, self.target)
                 return
-            from server.traffic import shortest_path
-            self.path = shortest_path(self.marker, self.target)[1:] if self.marker in map_config.MARKERS                 else [self.target]          # 지도 길을 따라 (서버 교통 정리가 마커마다 세울 수 있게)
+            path = shortest_path(self.marker, self.target)   # 지도 길을 따라 (서버 교통 정리가 마커마다 세울 수 있게)
+            self.path = path[1:] if path else [self.target]
             self.status = cmd
         elif cmd == "wait":
             self.status, self.hold = "idle", "wait"

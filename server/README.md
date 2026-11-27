@@ -7,6 +7,7 @@
 | `fleet.py` | 로봇 상태(대기·순찰·막힘 정지·과열 확인·출동·대피 안내·복귀) · 마커로 구역 위치 계산 |
 | `events.py` | 이벤트 판단 · 과열 교차 확인 (두 대 모두 50℃ 초과 + 불꽃 → 화재 확정) |
 | `dispatch.py` | 대피 안내: 불난 마커를 피해 마커마다 출구 방향(화살표) 계산. 충전 교대 · 출동 · 합류점 우선권은 아직 |
+| `route.py` | 동선 계산 · 다음 마커, 갈림길 방향 `turn_at(역할, 지난 마커, 지금 마커, going)` → left · right · straight · follow. 서버(교통 정리)와 Pi(보드에 방향 명령)가 같이 씀 |
 | `traffic.py` | 교통 정리 · 다음 마커 예약(먼저 찍은 로봇 우선, 같은 마커면 wait), 도크 길 한 대씩, 복귀 지점에서 서버가 dock |
 | `fake_robots.py` | 가짜 로봇. MQTT로 상태·이벤트를 흉내 내 로봇 없이 서버·대시보드 개발 |
 | `api.py` | FastAPI: WebSocket `/ws`, 사진 `POST·GET /photos`, 경보 닫기(정탐·오탐), 지난 경보 `GET /events`, 관리자 잠금 (실행 진입점) |
@@ -42,4 +43,17 @@ A·B가 같은 마커나 도크 길에서 부딪히지 않게 서버가 `wait`�
 | 복귀를 서버가 정할지 | `SERVER_DOCK` |
 
 대피 중에는 쓰지 않습니다 (guide가 로봇을 세움).
+
+## 갈림길 방향 (Pi가 쓰는 법)
+
+```python
+from server import route
+route.turn_at("A", prev=13, cur=12)                 # "straight" 순찰: 12를 지나 11로
+route.turn_at("A", prev=13, cur=12, going="dock")   # "left"     복귀: 도크 쪽
+route.turn_at("B", prev=15, cur=12)                 # "straight" 출발: 줄기 따라 7로
+```
+
+- 마커를 읽을 때마다 (역할, 지난 마커, 지금 마커, 지금 하는 일)로 부르고, `left` · `right` · `straight`면 보드에 그 방향을 보냅니다. `follow`는 갈림길이 아님(선만 따라감), `None`은 모름
+- `going`: 순찰 `"patrol"`, `dock` 명령 뒤 `"dock"`, `go` 명령 뒤 `"go"`(+ `zone`)
+- 동선은 `map_config.py`만 보고 계산하므로 동선이 바뀌어도 Pi 코드는 그대로입니다. 갈림길 표 `TURNS`와 계산이 같은지 셀프 체크가 확인합니다
 

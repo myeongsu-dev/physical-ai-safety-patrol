@@ -13,7 +13,7 @@ TODO: 상태(대기·순찰·막힘 정지·과열 확인·출동·대피 안내
 import time
 
 from common import protocol  # 메시지 이름·형식은 여기서만 가져온다
-from server import map_config
+from server import map_config, route
 
 ONLINE_SEC = 5          # 이 시간 안에 state가 온 로봇만 출발 대상
 ON_DUTY = ("patrol",)   # 이 상태면 이미 역할을 맡아 순찰 중
@@ -35,8 +35,7 @@ class Fleet:
         prev = self.robots.get(robot, {}).get("marker")
         new = msg.get("marker")
         if prev in map_config.MARKERS and new in map_config.MARKERS and prev != new:
-            from server.dispatch import compass
-            self.heading[robot] = compass(prev, new)
+            self.heading[robot] = route.compass(prev, new)
         if new in map_config.MARKERS:
             self.saw_marker.add(robot)
         self.robots[robot] = {**msg, "seen": self.clock()}
