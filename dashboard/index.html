@@ -8,7 +8,7 @@
 </head>
 <body>
 <div class="evacuate" id="evacuate" hidden>
-  <span>대피 모드: 가까운 비상구로 대피하세요</span>
+  <span>대피 모드: 화살표 방향의 비상구로 대피하세요</span>
   <div class="evacuate-actions" id="evacuate-actions"></div>
 </div>
 
@@ -26,6 +26,7 @@
       <span class="value">-</span>
     </div>
     <button type="button" class="sound-btn off" id="sound" data-sound="1" hidden>경보음 켜기</button>
+    <a class="bar-btn" id="view-switch" href="?admin">관리자 화면</a>
     <div class="clock">
       <span id="date">-</span>
       <span id="time">-</span>
@@ -33,9 +34,20 @@
   </div>
 </header>
 
+<div class="shell" id="shell">
+<!-- 관리자 화면만: 왼쪽 탭. 실시간 관제(지금 일) / 기록(지난 일). 팝업 · 경보음 · 대피 띠는 탭과 상관없이 -->
+<nav class="tabs" id="tabs" aria-label="관리자 화면 탭" hidden>
+  <button type="button" class="tab on" data-tab="live" aria-pressed="true">실시간 관제 <span class="badge" id="tab-badge" hidden></span></button>
+  <button type="button" class="tab" data-tab="records" aria-pressed="false">기록</button>
+</nav>
+
+<main class="main">
 <div class="notice" id="notice" hidden></div>
 
 <div class="layout">
+  <!-- 요약 줄: 관리자 화면은 로봇 3칸 + 경보 4칸, 기본 화면은 경보 4칸. 경보 칸을 누르면 팝업 -->
+  <section class="kpis" id="kpis" aria-label="현황 요약"></section>
+
   <section class="map-panel" aria-label="미션맵">
     <h2>미션맵</h2>
     <div class="map-area">
@@ -45,13 +57,14 @@
   </section>
 
   <section class="panel history-panel" id="history-panel" aria-label="경보 이력" hidden>
-    <h2>경보 이력 <span class="sub">이 화면을 연 뒤에 받은 경보. 새로고침하면 해제된 것은 사라집니다</span></h2>
+    <h2>경보 이력 <span class="sub" id="history-sub">서버에 기록된 경보, 최근 것부터</span></h2>
     <div class="table-wrap">
       <table class="history">
         <thead><tr><th>시각</th><th>종류</th><th>로봇</th><th>경로</th><th>위치</th><th>해제</th><th>사진</th></tr></thead>
         <tbody id="history"></tbody>
       </table>
     </div>
+    <div class="history-more" id="history-more"></div>
   </section>
 
   <aside class="side">
@@ -61,21 +74,11 @@
         <span class="level" id="level">-</span>
         <span class="mode">현재 모드 <b id="mode">-</b></span>
       </div>
-      <dl class="counts">
-        <div><dt>화재·과열</dt><dd class="count" id="count-fire">-</dd></div>
-        <div><dt>통로 차단</dt><dd class="count" id="count-obstacle">-</dd></div>
-        <div><dt>밟힘 주의</dt><dd class="count" id="count-floor">-</dd></div>
-      </dl>
     </section>
 
-    <section class="panel" aria-label="로봇 현황">
+    <section class="panel" id="robot-panel" aria-label="로봇 현황" hidden>
       <h2>로봇 현황 <span class="sub" id="robot-count"></span></h2>
       <ul class="robot-cards" id="robot-list"></ul>
-    </section>
-
-    <section class="panel" id="detail-panel" aria-label="경보 상세" hidden>
-      <h2>경보 상세</h2>
-      <div class="detail" id="detail"></div>
     </section>
 
     <section class="panel" aria-label="최근 경보">
@@ -83,10 +86,39 @@
       <ul class="alerts" id="alerts"></ul>
     </section>
   </aside>
+
+  <aside class="records-side" id="records-side" hidden>
+    <section class="panel side-note helmet-panel" id="helmet-panel" aria-label="안전모 미착용 기록" hidden>
+      <h2>안전모 미착용 <span class="sub">현장 음성 안내 기록, 누르면 사진</span></h2>
+      <div id="helmet"></div>
+    </section>
+
+    <section class="panel stats-panel" id="stats-panel" aria-label="정탐률">
+      <h2>정탐률 <span class="sub">정탐 ÷ 해제한 경보</span></h2>
+      <div id="stats"></div>
+    </section>
+  </aside>
+</div>
+</main>
 </div>
 
+<!-- 요약 줄 경보 칸에 여러 건이 있을 때 고르는 목록 -->
+<div class="kpi-pick" id="kpi-pick" hidden></div>
 <div class="popup-wrap" id="popup" hidden></div>
 <div class="viewer-wrap" id="viewer" hidden></div>
+
+<div class="popup-wrap login-wrap" id="login" hidden>
+  <form class="login" id="login-form" role="dialog" aria-modal="true" aria-labelledby="login-title">
+    <h2 id="login-title">관리자 화면</h2>
+    <label for="login-password">관리자 비밀번호</label>
+    <input type="password" id="login-password" autocomplete="current-password">
+    <p class="error" id="login-error" hidden></p>
+    <div class="login-actions">
+      <button type="submit" class="login-btn" id="login-btn">들어가기</button>
+      <a class="login-back" id="login-back" href="./">기본 화면으로</a>
+    </div>
+  </form>
+</div>
 
 <script type="module" src="js/app.js"></script>
 </body>

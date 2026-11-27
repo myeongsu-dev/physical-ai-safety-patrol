@@ -27,7 +27,8 @@
 <h2>모드</h2>
 <div class="row">
   <span>현재: <b id="mode">-</b></span>
-  <button data-act="fire">화재 + 대피</button>
+  <button data-act="fire">화재 확정 + 대피</button>
+  <label>불난 마커 <select id="fire-marker"><option value="">로봇 위치</option></select></label>
   <button data-act="normal">대피 해제</button>
 </div>
 
@@ -37,7 +38,7 @@
   <button data-emit="floor_object">밟힘 주의</button>
   <button data-emit="heat">과열</button>
   <button data-emit="helmet">안전모 미착용</button>
-  <button data-emit="flame">화재</button>
+  <button data-emit="flame">불꽃 감지</button>
 </div>
 
 <h2>로봇</h2>
@@ -112,12 +113,16 @@ document.body.addEventListener("click", async (ev) => {
   const b = ev.target.closest("button");
   if (!b) return;
   const act = b.dataset.act;
-  if (act === "fire") fake.fire();
+  if (act === "fire") {
+    const m = document.getElementById("fire-marker").value;
+    fake.fire(undefined, m ? Number(m) : undefined);
+  }
   if (act === "normal") await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
   if (b.dataset.emit) fake.emit(b.dataset.emit);
   if (b.dataset.check) await fake.fetch(`/events/${b.dataset.check}/check`, { method: "POST" });
 });
 
+for (let m = 1; m <= 15; m++) document.getElementById("fire-marker").insertAdjacentHTML("beforeend", `<option>${m}</option>`);
 connect();
 </script>
 </body>

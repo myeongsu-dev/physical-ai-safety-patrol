@@ -1,14 +1,12 @@
 // 서버 연결. 진짜 서버의 WebSocket /ws에 붙고, 끊기면 다시 붙는다.
-// 주소에 ?fake를 붙이면 가짜 서버(js/fake.js)에 붙는다.
-
-import { FakeServer } from "./fake.js";
+// fake에 가짜 서버(js/fake.js의 FakeServer)를 넘기면 그쪽에 붙는다.
 
 const RETRY_MS = 2000; // 끊기면 이만큼 기다렸다가 다시 붙는다
 
 // onMessage(msg): 서버 메시지 하나
 // onStatus(status): "connecting" · "open" · "closed"
-export function connect({ fake = false, onMessage, onStatus }) {
-  const server = fake ? new FakeServer().start() : null;
+export function connect({ fake = null, onMessage, onStatus }) {
+  const server = fake;
   let sock = null;
   let timer = null;
 
@@ -44,7 +42,12 @@ export function connect({ fake = false, onMessage, onStatus }) {
     fake: server, // 가짜 서버일 때만. 개발자 도구에서 fake.emit("heat") 처럼 쓴다
     // 화면 → 서버 요청 (경보 해제, 대피 해제 등)
     request(path, opts) {
-      return server ? server.fetch(path, opts) : fetch(path, opts);
+      return request(server, path, opts);
     },
   };
+}
+
+// 화면 → 서버 요청. 가짜 서버가 있으면 그쪽으로
+export function request(server, path, opts) {
+  return server ? server.fetch(path, opts) : fetch(path, opts);
 }

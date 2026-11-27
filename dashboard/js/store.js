@@ -7,7 +7,7 @@ import { DOCK_MARKER } from "./mapdata.js";
 export const ROBOTS = ["A", "B", "C", "D"];
 
 // 화면에 보이는 로봇 이름. 서버·Pi와 주고받는 이름(ROBOT_ID)은 A~D 그대로 두고 화면에서만 바꾼다.
-// 팀 공통 이름은 아직 미정 (README "화면 용어")
+// 팀 공통 이름으로 정함 (README "화면 용어")
 export const ROBOT_LABEL = { A: "MD-1", B: "MD-2", C: "MD-3", D: "MD-4" };
 
 export function robotLabel(name) {
@@ -25,9 +25,12 @@ export function createStore() {
     seen: {}, // 로봇 이름 → 마지막으로 연락된 시각 (ms). 모르면 null
     offline: {}, // 로봇 이름 → 서버가 끊겼다고 알려 줌 (online:false)
     mode: "normal",
+    // 대피 안내 { fire, exits, arrows }. 서버가 대피 모드로 바꾸면 mode 메시지 다음에 보내는 evac 메시지 (server/dispatch.py).
+    // fire: 불난 마커(관리자가 직접 대피로 바꾸면 null), exits: 출구 마커, arrows: [{ marker, dir, exit, path }] 마커마다
+    evac: null,
     events: new Map(), // id → 해제 안 된 경보
-    // 경보 이력: id → { event, role, checkedAt }. 해제된 경보도 남긴다.
-    // 서버에 지난 경보를 꺼내 주는 요청이 아직 없어서, 이 화면을 연 뒤에 받은 경보만 남는다
+    // 경보 이력: id → { event, role }. 해제된 경보도 남긴다 (event.checked).
+    // 이 화면을 연 뒤에 받은 경보 + 서버에서 꺼내 온 지난 경보(GET /events, loadHistory)
     history: new Map(),
   };
 }
@@ -55,27 +58,90 @@ export function apply(store, msg, now = Date.now()) {
     }
   } else if (msg.kind === "mode") {
     store.mode = msg.mode;
+    if (msg.mode !== "evacuate") store.evac = null; // 평상시로 돌아가면 대피 안내도 끝 (서버는 따로 알리지 않음)
+  } else if (msg.kind === "evac") {
+    store.evac = {
+      fire: Number.isInteger(msg.fire) ? msg.fire : null,
+      exits: Array.isArray(msg.exits) ? msg.exits : [],
+      arrows: Array.isArray(msg.arrows) ? msg.arrows : [],
+    };
   } else if (msg.kind === "event") {
     if (msg.checked) store.events.delete(msg.id);
     else store.events.set(msg.id, msg);
-    remember(store, msg, now);
+    remember(store, msg);
   }
 }
 
-export const HISTORY_MAX = 200;
+export const HISTORY_MAX = 2000; // 화면이 들고 있는 경보 이력 최대 건수 (넘으면 오래된 것부터 뺌)
 
-function remember(store, msg, now) {
+function remember(store, msg) {
   const prev = store.history.get(msg.id);
   store.history.set(msg.id, {
     event: { ...(prev?.event ?? {}), ...msg },
     // 경보에는 경로가 없어서, 받은 순간 그 로봇이 맡고 있던 경로를 같이 적어 둔다
     role: prev?.role ?? store.robots[msg.robot]?.role ?? null,
-    // 서버가 해제 시각을 보내지 않아서, 이 화면이 해제 소식을 받은 시각
-    checkedAt: msg.checked ? (prev?.checkedAt ?? now) : null,
   });
   while (store.history.size > HISTORY_MAX) {
     store.history.delete(Math.min(...store.history.keys()));
   }
+}
+
+// 서버에서 꺼내 온 지난 경보(GET /events)를 경보 이력에 합친다. 해제 안 된 경보 목록(events)은 건드리지 않는다
+// (WebSocket이 붙자마자 보내 줌). 지난 경보는 받은 때의 경로를 모르니 role은 null.
+// 이미 해제로 받은 경보를 예전 값(해제 전)으로 되돌리지 않는다
+export function loadHistory(store, list) {
+  if (!Array.isArray(list)) return;
+  for (const e of list) {
+    if (!e || typeof e.id !== "number") continue;
+    const prev = store.history.get(e.id);
+    const keep = prev?.event.checked && !e.checked;
+    store.history.set(e.id, {
+      event: keep ? { ...e, ...pick(prev.event, ["checked", "checked_at", "false_alarm"]) } : { ...(prev?.event ?? {}), ...e },
+      role: prev?.role ?? null,
+    });
+  }
+  while (store.history.size > HISTORY_MAX) {
+    store.history.delete(Math.min(...store.history.keys()));
+  }
+}
+
+function pick(o, keys) {
+  return Object.fromEntries(keys.filter((k) => k in o).map((k) => [k, o[k]]));
+}
+
+// 정탐률: 해제한 경보 중 실제였던(오탐이 아닌) 비율. 경보 종류별과 전체.
+// 로봇이 놓친 위험은 경보가 없어서 셀 수 없다. 그래서 "정확도"가 아니라 정탐률이다.
+// 화면이 가진 경보 이력(서버에서 꺼내 온 것 포함)만 센다. 안전모 미착용은 뺀다 (현장 음성 안내만, 대시보드에 안 보임)
+export const STAT_TYPES = ["obstacle", "floor_object", "heat", "flame"];
+export function alarmStats(store) {
+  const rows = Object.fromEntries(STAT_TYPES.map((t) => [t, { type: t, closed: 0, falseAlarm: 0 }]));
+  for (const { event: e } of store.history.values()) {
+    if (!e.checked || !rows[e.type]) continue;
+    rows[e.type].closed += 1;
+    if (e.false_alarm === true) rows[e.type].falseAlarm += 1;
+  }
+  const list = STAT_TYPES.map((t) => withRate(rows[t]));
+  const total = withRate(list.reduce((a, r) => ({ ...a, closed: a.closed + r.closed, falseAlarm: a.falseAlarm + r.falseAlarm }),
+    { type: "all", closed: 0, falseAlarm: 0 }));
+  return { rows: list, total };
+}
+
+function withRate(r) {
+  const real = r.closed - r.falseAlarm;
+  return { ...r, real, rate: r.closed ? real / r.closed : null };
+}
+
+// 안전모 미착용 기록 (관리자 화면 따로 칸, 사진 없음). 현장에서는 음성 안내로 처리하고, 대시보드는 기록만 본다.
+// 화면이 가진 경보 이력(이 화면을 연 뒤 받은 것 + 서버에서 꺼내 온 것)만 센다.
+//   today: 오늘 건수, total: 전체 건수, byMarker: 위치별 건수(많은 순), recent: 최근 기록(새것부터)
+export function helmetLog(store, now = Date.now(), recentMax = 10) {
+  const list = [...store.history.values()].map((h) => h.event).filter((e) => e.type === "helmet").sort((a, b) => b.id - a.id);
+  const day = new Date(now).toDateString();
+  const today = list.filter((e) => e.ts && new Date(e.ts * 1000).toDateString() === day).length;
+  const counts = new Map();
+  for (const e of list) if (e.marker != null) counts.set(e.marker, (counts.get(e.marker) ?? 0) + 1);
+  const byMarker = [...counts].map(([marker, count]) => ({ marker, count })).sort((a, b) => b.count - a.count || a.marker - b.marker);
+  return { today, total: list.length, byMarker, recent: list.slice(0, recentMax) };
 }
 
 // 경보 이력, 새것부터. 안전모 미착용은 뺀다 (openAlerts와 같은 기준)
@@ -96,38 +162,69 @@ export function robotOnline(store, name, now = Date.now()) {
 }
 
 // 안전 현황 (README "안전 현황")
-//   화재: 대피 모드이거나 해제 안 된 화재 경보가 있음
-//         교차 확인은 아직 서버에 없어서, 지금은 flame 경보가 오면 바로 화재로 본다
-//   주의: 해제 안 된 통로 차단 · 밟힘 주의 · 과열 경보가 있거나, 끊긴 로봇이 있음
+//   화재: 대피 모드. 화재는 서버가 교차 확인(server/events.py)으로 확정하고 대피 모드로 바꾼다.
+//         화면이 서버보다 먼저 화재라고 하지 않는다
+//   주의: 해제 안 된 통로 차단 · 밟힘 주의 · 과열 · 불꽃 감지 경보가 있거나, 끊긴 로봇이 있음.
+//         불꽃 감지(flame)는 로봇 한 대가 불꽃을 본 것이라 서버가 아직 확인하는 중이다
 //   안전: 그 밖
-// 안전모 미착용(helmet)은 화면에 보여 줄지 미정이라 넣지 않는다.
+// 안전모 미착용(helmet)은 현장 음성 안내만 하고 대시보드에는 보여 주지 않는다 (팀 결정). 서버는 보내지만 화면이 거른다.
 // 서버가 끊겨 있으면 지금 상태를 알 수 없으므로 level은 "unknown"
 export function safetySummary(store, now = Date.now()) {
-  const counts = { fire: 0, obstacle: 0, floor: 0 }; // 화재·과열, 통로 차단, 밟힘 주의
+  const counts = { heat: 0, obstacle: 0, floor: 0 }; // 과열·불꽃 감지, 통로 차단, 밟힘 주의
   for (const e of store.events.values()) {
-    if (e.type === "flame" || e.type === "heat") counts.fire += 1;
+    if (e.type === "flame" || e.type === "heat") counts.heat += 1;
     else if (e.type === "obstacle") counts.obstacle += 1;
     else if (e.type === "floor_object") counts.floor += 1;
   }
-  const flame = [...store.events.values()].some((e) => e.type === "flame");
-  const heat = counts.fire > 0 && !flame;
   const offline = connectionSummary(store, now).robots.filter((r) => !r.online).length;
 
   let level = "safe";
   if (store.server !== "open") level = "unknown";
-  else if (store.mode === "evacuate" || flame) level = "fire";
-  else if (heat || counts.obstacle || counts.floor || offline) level = "caution";
+  else if (store.mode === "evacuate") level = "fire";
+  else if (counts.heat || counts.obstacle || counts.floor || offline) level = "caution";
 
   return { level, mode: store.mode, counts, offline };
 }
 
 // 최근 경보: 해제 안 된 경보, 새것부터.
-// 안전모 미착용은 화면에 보여 줄지 미정이라 뺀다 (safetySummary와 같은 기준)
+// 안전모 미착용은 대시보드에 보여 주지 않는다 (safetySummary와 같은 기준)
 export function openAlerts(store, limit = 5) {
   return [...store.events.values()]
     .filter((e) => e.type !== "helmet")
     .sort((a, b) => b.id - a.id)
     .slice(0, limit);
+}
+
+// 지도에 그릴 대피 안내: 대피 모드일 때 서버가 보낸 evac 메시지. 아니면 null.
+// 불꽃 감지(flame) 경보만으로는 그리지 않는다. 화재는 서버가 확정한 것만 보여 준다
+export function evacView(store) {
+  return store.mode === "evacuate" ? store.evac : null;
+}
+
+// 멈춘 로봇 (이슈 #22). "대기"(idle)인데 다음 중 하나면 멈춤으로 본다. 안전 현황 단계는 올리지 않는다.
+//   - state에 hold(멈춘 이유, edge/agent.py)가 있음: 어디에 있든. 서버는 hold가 있는 로봇을 자동 출발시키지 않으므로
+//     충전 스테이션에 있어도 저절로 나가지 않는다 (server/fleet.py)
+//   - 충전 스테이션이 아닌 곳에 있음: hold가 없거나 null이어도 (예전 Pi는 hold를 안 보냄)
+// reason: hold를 화면 말로. hold가 없으면 null (화면은 "현장 확인 필요")
+export const HOLD_TEXT = {
+  wait: "교차 확인 대기",
+  stop: "관리자 정지",
+  guide: "대피 안내 중",
+  link: "안전 정지: 보드 연결 끊김",
+  stream: "안전 정지: 보드 센서 값 끊김",
+  no_ack: "안전 정지: 보드가 명령에 답 없음",
+  board: "안전 정지: 보드 동작 오류",
+  send: "안전 정지: 보드에 명령 못 보냄",
+  line: "안전 정지: 선을 놓침",
+  not_ready: "출발 못 함: 보드·센서 준비 안 됨",
+  exit: "Pi 프로그램 꺼짐",
+};
+export function robotStop(msg) {
+  if (!msg || msg.status !== "idle") return null;
+  const hold = typeof msg.hold === "string" && msg.hold ? msg.hold : null;
+  const offDock = msg.marker != null && msg.marker !== DOCK_MARKER;
+  if (!hold && !offDock) return null;
+  return { hold, reason: hold ? HOLD_TEXT[hold] ?? hold : null };
 }
 
 // 로봇 위치를 글자로. 예: "A 경로 · 마커 8", "충전 스테이션", "마커 14"

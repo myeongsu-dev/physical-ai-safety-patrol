@@ -37,3 +37,10 @@ export const ROUTES = {
 };
 
 export const BATTERY_RETURN = 25;
+
+// 충전 복귀 지점: 이 마커에서 back 순서로 충전 스테이션에 간다 (map_config.RETURN_POINT의 marker)
+export const RETURN_POINT = { A: 12, B: 7 };
+
+// 대피 출구 마커: 5번(비상구 1 옆), 8번(비상구 2 옆). 가짜 서버가 대피 경로를 셀 때만 쓴다.
+// 화면은 서버가 보낸 evac 메시지의 exits를 그린다. 서버 map_config.EXITS도 [5, 8]이어야 한다 (PR #23은 임시로 [15])
+export const EXITS = [5, 8];
