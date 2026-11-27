@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN, RETURN_POINT, EXITS } from "./js/mapdata.js";
 import { FakeServer, EVENT_TYPES, evacPlan } from "./js/fake.js";
-import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, evacView, loadHistory, alarmStats, robotStop, helmetLog, ONLINE_SEC } from "./js/store.js";
+import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, evacView, loadHistory, alarmStats, robotStop, robotWaiting, helmetLog, ONLINE_SEC } from "./js/store.js";
 import { robotLayer, fireLayer, guideLayer, corridorPoints, MARKER_POS } from "./js/map.js";
 import { checkAdmin, withPassword, ADMIN_HEADER } from "./js/auth.js";
 
@@ -1000,6 +1000,11 @@ class FakeAudioContext {
   assert.equal(robotStop(undefined), null);
   assert.deepEqual(robotStop({ status: "idle", marker: 7 }), { hold: null, reason: null });
   assert.deepEqual(robotStop({ status: "idle", marker: 7, hold: "line" }), { hold: "line", reason: "안전 정지: 선을 놓침" });
+  // 서버 대기(wait: 교통 정리 · 교차 확인)는 멈춤이 아님. 서버가 다시 출발시킨다
+  assert.equal(robotStop({ status: "idle", marker: 7, hold: "wait" }), null);
+  assert.equal(robotWaiting({ status: "idle", marker: 7, hold: "wait" }), true);
+  assert.equal(robotWaiting({ status: "idle", marker: 7, hold: "stop" }), false);
+  assert.equal(robotWaiting({ status: "patrol", marker: 7, hold: null }), false);
   // edge/agent.py가 쓰는 hold 값은 모두 문구가 있음
   const { HOLD_TEXT } = await import("./js/store.js");
   const agent = (await import("node:fs")).readFileSync(new URL("../edge/agent.py", import.meta.url), "utf8");
@@ -1064,13 +1069,14 @@ class FakeAudioContext {
   assert.equal(fake.robots.A.hold, null);
   assert.equal(fake.robots.A.status, "patrol");
   assert.ok(!/멈춤|data-resume/.test(card()));
-  // 교차 확인 대기(wait)는 서버가 진행 중이라 버튼 없음
+  // 서버 대기(wait: 교통 정리 · 교차 확인)는 멈춤이 아니라 버튼 없음, 주황 테두리 없음
   fake.robots.B.marker = 7;
   fake.halt("B", "wait");
   await tickWait();
   const cardB = el("robot-list").innerHTML.split("<li").find((x) => x.includes(">MD-2<"));
-  assert.match(cardB, /교차 확인 대기/);
-  assert.ok(!cardB.includes("data-resume"));
+  assert.match(cardB, /class="state">서버 대기</);
+  assert.match(cardB, /길이 비면 서버가 다시 출발시킴/);
+  assert.ok(!cardB.includes("data-resume") && !cardB.includes("stopped") && !cardB.includes("멈춤"));
   // 못 보내면 카드에 알림 (가짜 서버가 모르는 로봇 → 404)
   fake.robots.C.marker = 9;
   fake.halt("C", "stop");

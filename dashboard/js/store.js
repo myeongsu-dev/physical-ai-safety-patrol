@@ -202,12 +202,14 @@ export function evacView(store) {
 }
 
 // 멈춘 로봇 (이슈 #22). "대기"(idle)인데 다음 중 하나면 멈춤으로 본다. 안전 현황 단계는 올리지 않는다.
+// 단, 서버가 세운 대기(hold "wait")는 멈춤이 아니다. 교통 정리(길이 빌 때까지, PR #35)와 교차 확인 대기에 쓰고,
+// 서버가 알아서 다시 출발시킨다. 화면은 robotWaiting()으로 "서버 대기"라고만 보여 준다
 //   - state에 hold(멈춘 이유, edge/agent.py)가 있음: 어디에 있든. 서버는 hold가 있는 로봇을 자동 출발시키지 않으므로
 //     충전 스테이션에 있어도 저절로 나가지 않는다 (server/fleet.py)
 //   - 충전 스테이션이 아닌 곳에 있음: hold가 없거나 null이어도 (예전 Pi는 hold를 안 보냄)
 // reason: hold를 화면 말로. hold가 없으면 null (화면은 "현장 확인 필요")
 export const HOLD_TEXT = {
-  wait: "교차 확인 대기",
+  wait: "서버 대기: 길이 비면 서버가 다시 출발시킴",
   stop: "관리자 정지",
   guide: "대피 안내 중",
   link: "안전 정지: 보드 연결 끊김",
@@ -222,9 +224,15 @@ export const HOLD_TEXT = {
 export function robotStop(msg) {
   if (!msg || msg.status !== "idle") return null;
   const hold = typeof msg.hold === "string" && msg.hold ? msg.hold : null;
+  if (hold === "wait") return null;
   const offDock = msg.marker != null && msg.marker !== DOCK_MARKER;
   if (!hold && !offDock) return null;
   return { hold, reason: hold ? HOLD_TEXT[hold] ?? hold : null };
+}
+
+// 서버가 세운 대기 (hold "wait"). 멈춤이 아니라 순찰 중으로 센다
+export function robotWaiting(msg) {
+  return !!msg && msg.status === "idle" && msg.hold === "wait";
 }
 
 // 로봇 위치를 글자로. 예: "A 경로 · 마커 8", "충전 스테이션", "마커 14"

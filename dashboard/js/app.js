@@ -2,7 +2,7 @@
 // 지도: 바탕(구역, 통로, 마커, 비상구, 충전 스테이션) 위에 화재 위치, 대피 화살표, (관리자 화면) 로봇 위치를 얹는다.
 
 import {
-  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, evacView, loadHistory, alarmStats, robotStop, helmetLog,
+  createStore, apply, setServer, connectionSummary, safetySummary, openAlerts, robotPlace, alertHistory, robotLabel, evacView, loadHistory, alarmStats, robotStop, robotWaiting, HOLD_TEXT, helmetLog,
 } from "./store.js";
 import { connect, request } from "./conn.js";
 import { FakeServer } from "./fake.js";
@@ -150,7 +150,7 @@ function renderKpis(s, serverOpen, now) {
     for (const r of s.robots) {
       const msg = store.robots[r.name];
       if (!r.online || robotStop(msg)) check += 1;
-      else if (msg?.status === "idle" && msg.marker === DOCK_MARKER) dock += 1;
+      else if (msg?.status === "idle" && msg.marker === DOCK_MARKER && !robotWaiting(msg)) dock += 1; // 서버 대기는 순찰 중으로
     }
     tiles.push({ label: "순찰 중", n: s.robots.length - dock - check, unit: "대", tone: "ok" });
     tiles.push({ label: "충전 스테이션", n: dock, unit: "대", tone: "" });
@@ -258,6 +258,8 @@ function renderRobots(s, serverOpen, now) {
         state = "멈춤";
         cls += " stopped";
       }
+      const waiting = r.online && robotWaiting(msg);
+      if (waiting) state = "서버 대기";
       if (!r.online) state = connText;
 
       const meta = [];
@@ -278,6 +280,7 @@ function renderRobots(s, serverOpen, now) {
         <div class="top"><span class="dot"></span><span class="name">${esc(robotLabel(r.name))}</span>
           <span class="state">${esc(state)}</span></div>
         <div class="place">${esc(robotPlace(msg))}</div>
+        ${waiting ? `<div class="wait-reason muted">${esc(HOLD_TEXT.wait)}</div>` : ""}
         ${stop ? `<div class="stop-reason">${esc(stop.reason ?? "현장 확인 필요")}</div>${resumeHtml(r.name, stop)}` : ""}
         <div class="meta">${meta.join(" · ")}</div>
         ${versionLine(msg)}
@@ -289,7 +292,7 @@ function renderRobots(s, serverOpen, now) {
 // ---------- 다시 출발 (관리자 화면) ----------
 // 멈춘 로봇(관리자 stop, 안전 정지 ...)은 서버가 자동 출발시키지 않으므로 관리자가 현장을 확인하고 누른다.
 // POST /robots/{로봇}/cmd {"cmd": "resume"} (관리자 비밀번호 헤더). Pi는 hold를 풀고 하던 일로 돌아간다.
-// 교차 확인 대기(wait)는 서버가 진행 중인 것이라 버튼을 두지 않는다. 대피 안내(guide)는 대피가 끝나면 서버가 푼다 (PR #31)
+// 서버 대기(wait)는 멈춤으로 보지 않아 버튼도 없다. 대피 안내(guide)는 대피가 끝나면 서버가 푼다 (PR #31)
 const resume = { pending: new Set(), error: null }; // error: { robot, text }
 
 function resumeHtml(robot, stop) {
