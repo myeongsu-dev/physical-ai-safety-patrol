@@ -479,8 +479,13 @@ class Agent:
         self.hold = "server"
 
     def _note_battery(self, now):
+        """D 한 줄의 배터리를 평균에 넣음. 보드가 0으로 잘못 읽은 값은 뺌 (넣으면 20%대에서도 평균이 15% 아래로 떨어짐)"""
+        try:
+            raw = float(self.board.values.get("bat"))
+        except (TypeError, ValueError):
+            return
         b = self.board.battery
-        if b is None:
+        if b is None or raw == 0:
             return
         q = self.bat_samples
         q.append((now, b))
@@ -493,16 +498,17 @@ class Agent:
         q = self.bat_samples
         return int(round(sum(b for _, b in q) / len(q))) if q else None
 
-    def _battery_low(self, full=False):
-        """평균이 BATTERY_STOP_PCT 이하인지. full이면 평균 시간을 거의 다 채운 뒤에만 (켜자마자 한 값으로 멈추지 않게)"""
+    def _battery_low(self):
+        """평균이 BATTERY_STOP_PCT 이하인지. 평균 시간을 거의 다 채운 뒤에만 판단 (표본 몇 개로 멈추거나 출발을 막지 않게).
+        걷는 중 정지와 출발 판단(patrol · resume · go · dock)이 같은 기준을 씀"""
         b, q = self.battery, self.bat_samples
         if b is None or b > config.BATTERY_STOP_PCT:
             return False
-        return not full or q[-1][0] - q[0][0] >= config.BATTERY_AVG_S * 0.8
+        return q[-1][0] - q[0][0] >= config.BATTERY_AVG_S * 0.8
 
     def _watch_battery(self, now):
         """배터리 평균이 BATTERY_STOP_PCT 이하면 그 자리에서 멈춤"""
-        if self._battery_low(full=True) and self.status in WATCHED and self.hold != "battery":
+        if self._battery_low() and self.status in WATCHED and self.hold != "battery":
             log.warning("배터리 %s%% (최근 %.0f초 평균) → 멈춤", self.battery, config.BATTERY_AVG_S)
             self._safe_halt("battery")
 

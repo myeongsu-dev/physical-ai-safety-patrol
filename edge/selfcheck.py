@@ -562,6 +562,23 @@ def check_server(spool):
     assert 58 <= ag.state()["battery"] <= 62, ag.state()["battery"]
     assert 58 <= states[-1]["battery"] <= 62   # 실제로 보낸 state도 평균
 
+    # 보드가 배터리를 0으로 잘못 읽은 값은 평균에서 뺌 (20%대에서 0이 섞여도 15% 정지 안 함)
+    ok20 = 6400 + 22 / 100 * 2000   # 22%
+    for i in range(int(config.BATTERY_AVG_S * 10) + 15):   # 평균 시간 + 실제로 보낸 state가 새 값만 담을 1초 더
+        dog.bat = 0 if i % 3 == 0 else ok20
+        run(ag, clock, 0.1)
+    assert ag.battery == 22 and states[-1]["battery"] == 22 and not ag._battery_low()
+
+    # 출발 판단도 평균: 켜자마자 표본 몇 개가 낮아도 patrol을 막지 않음 (평균 시간을 채운 뒤 낮으면 그때 멈춤)
+    ag2, dog2, _, clock2, _, _ = make(spool)
+    dog2.bat = 6400 + 10 / 100 * 2000   # 10%
+    run(ag2, clock2, 0.3)
+    ag2.on_command(protocol.command("patrol"))
+    run(ag2, clock2, 0.3)
+    assert ag2.status == "patrol" and ag2.hold is None
+    run(ag2, clock2, config.BATTERY_AVG_S)
+    assert ag2.status == "idle" and ag2.hold == "battery"
+
     # 배터리 평균이 15% 이하면 그 자리에서 멈춤. 잠깐 떨어진 것은 평균에 묻혀 무시
     dog.bat = 7800
     run(ag, clock, config.BATTERY_AVG_S + 0.5)
