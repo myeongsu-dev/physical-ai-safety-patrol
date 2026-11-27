@@ -11,7 +11,7 @@ MechDog 제어 보드(ESP32 · MicroPython)에 올리는 프로그램입니다. 
 | Pi가 2초 넘게 조용하면 정지 + LED 오류 | 안전 |
 
 - 입력·출력: Pi 5와 USB 시리얼 `CMD|…|$` ([docs/protocol.md](../../docs/protocol.md) 1절)
-- 프로그램: `main.py`. 시험 도구의 `mechdog_test.py`(BLE)와 명령 처리가 같고, USB 시리얼(REPL과 같은 UART, 115200)로 받습니다. `A`(음성), `L|arrow|left·right·up·x`(LED에 `<` `>` `^` `X` 글자), 2초 감시(멈추고 LED에 `E`)가 더해졌습니다.
+- 프로그램: `main.py`. 시험 도구의 `mechdog_test.py`(BLE)와 명령 처리가 같고, USB 시리얼(REPL과 같은 UART, 115200)로 받습니다. `A`(음성), `L|arrow|left·right·up·down·x`(LED에 `<` `>` `^` `v` `X` 글자), 2초 감시(멈추고 LED에 `E`)가 더해졌습니다.
 - 셀프 체크: `python firmware/dog/sim_check.py` (가짜 Hiwonder 모듈로 PC에서, CI도 돌림)
 - `main()`은 스레드가 아니라 파일 맨 끝에서 직접 돕니다. 파일이 끝나면 REPL이 켜져 Pi 명령을 가로채기 때문입니다.
 - 올리기 (PC·Pi 같음): `python firmware/dog/upload.py [포트]`. 포트를 안 주면 `.env`의 `DOG_PORT`를 쓰고, 모르면 `python -m edge.hwcheck ports`로 찾습니다.
@@ -57,4 +57,4 @@ MechDog 제어 보드(ESP32 · MicroPython)에 올리는 프로그램입니다. 
 
 - 바닥 카메라로 선 따라가기와 색 마커를 함께 읽을 수 있는지 (지금은 펌웨어가 따로)
 - MP3 모듈이 포트 2(주소 0x7B)에서 잡히는지, 1~2m에서 들리는지. `main.py`는 `Hiwonder_IIC.MP3`·`volume`·`playTrack` 이름으로 가정했으니 실제 이름으로 맞춥니다
-- LED 화살표가 로봇 기준 방향과 맞는지 (LED는 `Hiwonder.Digitaltube`, IO32·IO33. `showNum`·`setBrightness`·`clear`·`drawStr(x, y, 글자)`·`setLedOnOff(x, y, 켜기)`. 지금은 `drawStr`로 `<` `>` `^` `X` 글자를 띄움)
+- LED 화살표가 로봇 기준 방향과 맞는지 (LED는 `Hiwonder.Digitaltube`, IO32·IO33. `showNum`·`setBrightness`·`clear`·`drawStr(x, y, 글자)`·`setLedOnOff(x, y, 켜기)`. 지금은 `drawStr`로 `<` `>` `^` `v` `X` 글자를 띄움)
