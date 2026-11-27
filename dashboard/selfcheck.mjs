@@ -223,7 +223,7 @@ assert.ok(!fake._snapshot().some((m) => m.kind === "evac"), "평상시로 돌아
   assert.equal(s.level, "caution");
   assert.equal(s.offline, 1);
 
-  // 불꽃 감지(flame)는 서버가 아직 확인하는 중이라 주의. 화재는 서버가 대피 모드로 바꿨을 때만
+  // 불꽃 감지(flame)는 관리자가 화재로 확정하기 전이라 주의. 화재는 대피 모드가 됐을 때만
   for (const r of ["A", "B", "C", "D"]) apply(st, { kind: "state", robot: r, online: true }, T + 6000);
   apply(st, { kind: "event", id: 5, type: "flame", checked: false }, T + 6000);
   assert.equal(safetySummary(st, T + 6000).level, "caution");
@@ -403,10 +403,9 @@ async function bootApp(search, tag, { login } = {}) {
   const app = await bootApp("?fake", "basic");
   const { el } = app;
   // 기본 화면의 관리자 화면 버튼: ?fake는 두고 admin을 붙인다
-  assert.equal(el("view-switch").textContent, "관리자 화면");
+  assert.equal(el("view-switch").textContent, "관리자모드");
   assert.equal(el("view-switch").href, "./?fake&admin");
-  assert.equal(el("server .value").textContent, "연결됨");
-  assert.equal(el("robots .value").textContent, "4/4대");
+  assert.equal(el("conn-status .value").textContent, "연결 정상 · 로봇 4/4");
   assert.equal(el("robot-list").innerHTML, ""); // 로봇 현황 카드는 관리자 화면에만 (칸은 HTML에서 hidden 그대로)
   assert.equal(el("mode").textContent, "평상시");
   assert.equal(el("evacuate").hidden, true);
@@ -553,7 +552,7 @@ async function bootApp(search, tag, { login } = {}) {
   assert.equal(fake.events.find((e) => e.id === ob2.id).false_alarm, true);
   assert.equal(el("popup").hidden, true);
 
-  // 불꽃 감지: 다른 경보처럼 바로 해제. 화재가 아니라서 대피 모드도 안 됨
+  // 불꽃 감지: 다른 경보처럼 바로 해제. 관리자가 화재 확정을 누르지 않으면 대피 모드는 안 됨
   const flame = fake.emit("flame", "C");
   await tickWait();
   await app.click({ kpi: "flame" });
@@ -604,6 +603,13 @@ class FakeAudioContext {
   assert.equal(a.play("floor_object"), 1);
   a.disable();
   assert.equal(a.play("evacuate"), 0);
+  assert.equal(a.play("flame", { force: true }), 2, "꺼져 있어도 force면 소리");
+  const b = createAlarm(FakeAudioContext);
+  assert.equal(b.play("flame", { force: true }), 0, "화면을 한 번도 안 눌렀으면 소리 장치가 없음");
+  b.unlock();
+  assert.equal(b.enabled, false, "unlock은 경보음을 켜지 않음");
+  assert.equal(b.play("flame", { force: true }), 2);
+  assert.equal(b.play("obstacle"), 0, "다른 경보는 꺼져 있으면 소리 없음");
   assert.equal(createAlarm(undefined).supported, false);
 }
 
@@ -615,9 +621,9 @@ class FakeAudioContext {
   await tickWait(550); // 화면을 연 직후의 첫 묶음 시간이 지나야 새 경보로 친다
 
   // 경보음 켜기 버튼
-  assert.equal(el("sound").textContent, "경보음 켜기");
+  assert.ok(el("sound").title.startsWith("경보음 켜기") && el("sound").innerHTML.includes("M3 3l18 18"), "꺼져 있으면 사선 아이콘");
   await app.click({ sound: "1" });
-  assert.equal(el("sound").textContent, "경보음 끄기");
+  assert.ok(el("sound").title === "경보음 끄기" && !el("sound").innerHTML.includes("M3 3l18 18"));
   beeps = 0;
 
   // 통로 차단 → 팝업 + 경보음 2번
@@ -641,12 +647,19 @@ class FakeAudioContext {
   await app.click({ popupClose: "1" });
   assert.equal(el("popup").hidden, true);
 
-  // 불꽃 감지 → 팝업 + 높은 경보음 2번. 화재가 아님
+  // 불꽃 감지 → 팝업 + 높은 경보음 2번. 대피 모드는 아님
   fake.emit("flame", "C");
   await tickWait();
   assert.equal(beeps, 5);
   assert.match(el("popup").innerHTML, /불꽃 감지 경보/);
   assert.equal(el("evacuate").hidden, true);
+  // 불꽃 감지 팝업에만 화재 확정 버튼
+  const flameId = el("popup").innerHTML.match(/data-fire="(\d+)"/)[1];
+  assert.ok(!el("popup").innerHTML.includes("data-sure"), "처음에는 묻기 전");
+  await app.click({ fire: flameId });
+  assert.match(el("popup").innerHTML, /불을 확인했나요/);
+  await app.click({ fireCancel: "1" });
+  assert.ok(!el("popup").innerHTML.includes("불을 확인했나요"));
   await app.click({ popupClose: "1" });
 
   // 밟힘 주의 → 팝업 + 경보음 1번
@@ -691,12 +704,22 @@ class FakeAudioContext {
   assert.ok(!el("popup").innerHTML.includes("대기 중인 팝업"));
   await app.click({ popupClose: "1" });
 
-  // 경보음 끄기 → 소리 안 남
+  // 경보음 끄기 → 소리 안 남. 불꽃 감지와 대피는 꺼져 있어도 남
   await app.click({ sound: "1" });
   beeps = 0;
   fake.emit("obstacle", "D");
   await tickWait();
   assert.equal(beeps, 0);
+  fake.emit("flame", "A");
+  await tickWait();
+  assert.equal(beeps, 2, "경보음을 꺼도 불꽃 감지 소리는 남");
+  beeps = 0;
+  await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "evacuate" }) });
+  await tickWait();
+  assert.equal(beeps, 3, "경보음을 꺼도 대피 소리는 남");
+  await app.click({ evacMute: "1" });
+  await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
+  await tickWait();
 
   app.stop();
   delete globalThis.AudioContext;
@@ -801,8 +824,8 @@ class FakeAudioContext {
       await tickWait(20);
       assert.equal(el("login").hidden, false, "비밀번호 칸");
       assert.equal(globalThis.document.title, undefined, "관리자 화면은 아직 안 엶");
-      assert.equal(el("login-back").href, "./?fake&lock", "기본 화면으로 (admin만 뺌)");
-      assert.equal(el("view-switch").textContent, "기본 화면으로");
+      assert.equal(el("login-back").href, "./?fake&lock", "기본모드 (admin만 뺌)");
+      assert.equal(el("view-switch").textContent, "기본모드");
       await submit(el, "nope");
       assert.equal(el("login-error").textContent, "비밀번호가 맞지 않습니다.");
       assert.equal(el("login-error").hidden, false);
@@ -933,19 +956,30 @@ class FakeAudioContext {
   assert.equal((await get("")).length, 30);
   assert.equal(f._openEvents().length, 0, "지난 경보는 붙자마자 받는 묶음에 없음");
 
-  // 화면: 관리자 화면을 열면 지난 경보를 받아 이력과 정탐률을 보여 주고, 50건씩 더 보기
+  // 화면: 관리자 화면을 열면 지난 경보를 받아 이력과 정탐률을 보여 주고, 10건씩 쪽 번호
   const app = await bootApp("?fake&admin&past", "past");
   const { el, fake } = app;
   await tickWait(20);
   assert.equal(el("history-sub").textContent, "서버에 기록된 경보, 최근 것부터");
   const rowsShown = () => (el("history").innerHTML.match(/<tr>/g) || []).length;
   const want = fake.events.filter((e) => e.type !== "helmet").length;
-  assert.equal(rowsShown(), Math.min(50, want));
+  assert.equal(rowsShown(), Math.min(10, want));
   assert.equal(el("stats-panel").hidden, false);
   assert.match(el("stats").innerHTML, /<th scope="row">전체<\/th>/);
   assert.match(el("stats").innerHTML, /<th scope="row">통로 차단<\/th>/);
-  // 지난 경보가 50건 안 되면 더 보기 없음 (가짜는 40건 중 안전모 빼고)
-  if (want <= 50) assert.equal(el("history-more").innerHTML, "");
+  // 서버에 더 없으면 "이전 기록 더 받기" 없음 (가짜는 40건 중 안전모 빼고)
+  assert.ok(!el("history-more").innerHTML.includes("data-more"));
+  assert.match(el("history-tools").innerHTML, new RegExp(`data-htype="all" aria-pressed="true">전체 <span>${want}</span>`));
+  // 다음 쪽
+  const firstRow = el("history").innerHTML.match(/data-alert="(\d+)"/)[1];
+  await app.click({ hpage: "1" });
+  assert.notEqual(el("history").innerHTML.match(/data-alert="(\d+)"/)[1], firstRow);
+  assert.match(el("history-more").innerHTML, /class="pg on" data-hpage="1" aria-current="page">2</);
+  // 종류 거르기: 그 종류만, 첫 쪽으로
+  await app.click({ htype: "heat" });
+  assert.ok(!/>통로 차단</.test(el("history").innerHTML) && !/>밟힘 주의</.test(el("history").innerHTML));
+  assert.match(el("history-more").innerHTML, /data-hpage="0" aria-current="page"/);
+  await app.click({ htype: "all" });
   // 오탐으로 해제하면 정탐률에 바로 들어감
   const before = alarmStats({ history: new Map(fake.events.map((e) => [e.id, { event: e }])) }).total.closed;
   const ob2 = fake.emit("obstacle", "A");
@@ -957,7 +991,7 @@ class FakeAudioContext {
   assert.equal(Number(totalText[1]) + Number(totalText[2]), Number(totalText[3]), "정탐 + 오탐 = 해제");
   app.stop();
 
-  // 더 보기: 50건 넘으면 버튼, 누르면 50건 더 (가짜 서버가 120건)
+  // 쪽 번호: 120건이면 첫 쪽 10건, 끝 쪽 번호, 범위 밖 쪽은 끝 쪽으로
   {
     const app2 = await bootApp("?fake&admin", "more");
     const f2 = app2.fake;
@@ -965,11 +999,13 @@ class FakeAudioContext {
     await app2.click({ pastRetry: "1" }); // 다시 받기와 같은 길로 첫 쪽을 다시 받음
     await tickWait(20);
     const n = f2.events.filter((e) => e.type !== "helmet").length;
-    assert.equal((app2.el("history").innerHTML.match(/<tr>/g) || []).length, 50);
-    assert.match(app2.el("history-more").innerHTML, /data-more="1">더 보기/);
-    await app2.click({ more: "1" });
-    await tickWait(20);
-    assert.equal((app2.el("history").innerHTML.match(/<tr>/g) || []).length, Math.min(100, n));
+    const pages = Math.ceil(n / 10);
+    assert.equal((app2.el("history").innerHTML.match(/<tr>/g) || []).length, 10);
+    assert.match(app2.el("history-more").innerHTML, new RegExp(`data-hpage="${pages - 1}">${pages}<`));
+    assert.match(app2.el("history-more").innerHTML, new RegExp(`${n}건 중 1–10`));
+    await app2.click({ hpage: String(pages + 5) });
+    assert.match(app2.el("history-more").innerHTML, new RegExp(`data-hpage="${pages - 1}" aria-current="page"`));
+    assert.equal((app2.el("history").innerHTML.match(/<tr>/g) || []).length, n - (pages - 1) * 10);
     app2.stop();
   }
 
@@ -1013,6 +1049,9 @@ class FakeAudioContext {
   assert.ok(holds.size >= 10, `edge/agent.py에서 hold 값을 못 찾음: ${[...holds]}`);
   for (const h of holds) assert.ok(h in HOLD_TEXT, `HOLD_TEXT에 ${h} 문구 없음 (edge/agent.py)`);
   assert.deepEqual(robotStop({ status: "idle", marker: 7, hold: "new_one" }), { hold: "new_one", reason: "new_one" }, "모르는 이유는 그대로");
+  // 이슈 #39 · 엣지 PR #47이 더하는 값
+  assert.equal(robotStop({ status: "idle", marker: 1, hold: "server" }).reason, "서버 연결 끊김으로 정지");
+  assert.match(robotStop({ status: "idle", marker: 1, hold: "battery" }).reason, /^배터리 부족으로 정지/);
 
   // 지도: 멈춘 로봇은 주황 테두리
   assert.ok(robotLayer([{ name: "MD-1", marker: 7, online: true, stopped: true }]).includes("#ff9f1a"));
@@ -1126,6 +1165,16 @@ class FakeAudioContext {
   assert.match(el("helmet").innerHTML, /<span class="helmet-photo">사진<\/span>/);
   assert.ok(!el("alerts").innerHTML.includes(`data-alert="${hm.id}"`));
   assert.ok(!el("history").innerHTML.includes(`data-alert="${hm.id}"`));
+  // 안전모 기록도 10건씩 쪽 번호
+  assert.ok(!el("helmet").innerHTML.includes("data-mpage"), "10건 이하면 쪽 번호 없음");
+  for (let i = 0; i < 11; i++) fake.emit("helmet", "B");
+  await tickWait();
+  assert.equal((el("helmet").innerHTML.match(/class="helmet-btn"/g) || []).length, 10);
+  assert.match(el("helmet").innerHTML, /data-mpage="1">2</);
+  await app.click({ mpage: "1" });
+  assert.equal((el("helmet").innerHTML.match(/class="helmet-btn"/g) || []).length, 2);
+  assert.match(el("helmet").innerHTML, new RegExp(`data-alert="${hm.id}"`), "가장 오래된 것은 둘째 쪽");
+  await app.click({ mpage: "0" });
   assert.equal(el("popup").hidden, true, "새 안전모 경보에 팝업 안 뜸");
   assert.equal(el("level").textContent, levelBefore);
   // 누르면 사진 팝업, 해제 · 오탐 버튼 없음
@@ -1152,6 +1201,36 @@ class FakeAudioContext {
   assert.equal(h.length, 1);
   assert.equal(h[0].event.checked, true);
   assert.ok(!("checkedAt" in h[0]));
+}
+
+// ---------- 불꽃 감지 팝업에서 화재 확정 → 대피 모드, 불난 곳은 그 경보의 마커 ----------
+{
+  const app = await bootApp("?fake&admin", "fireconfirm");
+  const { el, fake } = app;
+  await tickWait(550);
+  fake.robots.A.marker = 6;
+  const fl = fake.emit("flame", "A");
+  await tickWait();
+  await app.click({ fire: String(fl.id) });
+  await app.click({ fire: String(fl.id), sure: "1" });
+  await tickWait();
+  assert.equal(fake.mode, "evacuate");
+  assert.equal(fake.evac.fire, 6, "불꽃 감지 마커가 불난 곳");
+  assert.equal(el("evacuate").hidden, false);
+  assert.match(el("popup").innerHTML, /대피 모드입니다/);
+  assert.ok(!el("popup").innerHTML.includes("data-fire="), "대피 중에는 화재 확정 버튼 없음");
+  assert.match(el("evacuate-actions").innerHTML, /data-evac-mute="1"/, "경보음을 안 켰어도 대피 소리는 나므로 멈춤 버튼");
+  // 마커가 지도에 없는 값이면(보드가 두 마커를 같이 읽은 "12+15" 등) fire 없이 대피
+  await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
+  assert.equal((await fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "evacuate", fire: 99 }) })).status, 400, "가짜 서버도 없는 마커는 400");
+  await tickWait();
+  const odd = fake._addEvent(fake.robots.B, "flame", { marker: "12+15" });
+  await app.click({ alert: String(odd.id) });
+  await app.click({ fire: String(odd.id), sure: "1" });
+  await tickWait();
+  assert.equal(fake.mode, "evacuate", "마커가 이상해도 대피는 됨");
+  assert.equal(fake.evac.fire, null);
+  app.stop();
 }
 
 console.log("dashboard selfcheck OK");
