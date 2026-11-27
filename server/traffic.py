@@ -7,7 +7,7 @@
    (순찰은 resume, 복귀 · 출동은 dock · go를 다시 보냄. Pi는 wait 뒤 resume을 받으면 순찰로 돌아가기 때문).
    충전 스테이션(DOCK_MARKER)에는 여러 대가 있어도 된다.
 2. 한 줄 길(SINGLE_LANES, 도크 길)은 한 번에 한 대만. 출발은 길이 비었을 때 한 대씩,
-   복귀(SERVER_DOCK)는 복귀 지점에서 길이 비었을 때만 dock을 보낸다. 안 비었으면 한 바퀴 더 돈다.
+   복귀(SERVER_DOCK)는 배터리 확인 지점(A 13, B 8)에서 길이 비었을 때만 dock을 보낸다. 안 비었으면 한 바퀴 더 돈다.
 3. 같은 마커를 TIE_WINDOW_S 안에 두 대가 원하면 TIE_BREAK 순서(PRIORITY → 배터리 낮은 쪽 → 이름)로 정한다.
    서버는 메시지를 하나씩 처리하므로 완전히 동시인 경우는 없다. 이 규칙은 거의 같이 온 것끼리의 순서다.
 대피 중(evacuate)에는 쓰지 않는다. guide가 로봇을 세우고, normal로 돌아오면 처음부터 다시 잡는다.
@@ -123,11 +123,11 @@ class Traffic:
         return []
 
     def _maybe_dock(self, robot, marker):
-        """복귀 지점에서 배터리가 낮으면 dock (도크 길이 비었을 때만)"""
+        """배터리 확인 지점(BATTERY_CHECK)에서 배터리가 낮으면 dock (도크 길이 비었을 때만). 로봇은 다음 마커에서 도크 쪽으로 꺾음"""
         if not map_config.SERVER_DOCK or self.kind(robot) != "patrol":
             return []
         role = self.fleet.role_of(robot)
-        rp = map_config.RETURN_POINT.get(role)
+        rp = map_config.BATTERY_CHECK.get(role)   # 확인은 꺾는 곳 한 마커 앞 (A 13, B 8)
         s = self.fleet.robots.get(robot, {})
         if not rp or marker != rp["marker"] or self.fleet.heading.get(robot) != rp["heading"] \
                 or s.get("battery", 100) > map_config.BATTERY_RETURN:
@@ -153,8 +153,9 @@ class Traffic:
         if moved:
             self._drop(robot)
             for lane, owner in list(self.lanes.items()):
-                if owner == robot and marker not in map_config.SINGLE_LANES[lane]:
-                    del self.lanes[lane]          # 한 줄 길을 빠져나감
+                if owner == robot and marker not in map_config.SINGLE_LANES[lane] and self.kind(robot) != "dock":
+                    del self.lanes[lane]          # 한 줄 길을 빠져나감 (나가는 로봇만. 들어오는 로봇은 확인 지점에서
+                                                  # 미리 잡아 두었다가 충전 스테이션에 닿으면 풂)
         k = self.kind(robot)
         target = map_config.DOCK_MARKER if k == "dock" else self.intent.get(robot, {}).get("zone")
         if k in ("dock", "go") and (moved and marker == target or status == "idle" and hold is None):
@@ -281,19 +282,37 @@ if __name__ == "__main__":
     state(t, "A", 12, role="A"); state(t, "A", 11, role="A")
     assert t.tick() == [("B", {"cmd": "dock"})]
 
-    # 3) 복귀: 복귀 지점(A 12, 서쪽)에서 배터리 BATTERY_RETURN 이하면 dock + 도크 길 잡음, 그동안 출발 안 함
+    # 3) 복귀: 확인 지점(A 13, 서쪽)에서 배터리 BATTERY_RETURN 이하면 dock + 도크 길 잡음, 그동안 출발 안 함
+    #    다음 마커 12를 예약하고, 12에서 도크 쪽(15)으로
     t = fresh(); f.roles.update({"A": "A"})
-    state(t, "A", 13, role="A", battery=map_config.BATTERY_RETURN)
-    out = state(t, "A", 12, role="A", battery=map_config.BATTERY_RETURN)
+    state(t, "A", 14, role="A", battery=map_config.BATTERY_RETURN)
+    out = state(t, "A", 13, role="A", battery=map_config.BATTERY_RETURN)
     assert out == [("A", {"cmd": "dock"})] and t.lanes[DOCK_LANE] == "A" and not t.can_depart()
-    assert t.reserved[15]["robot"] == "A"
+    assert t.reserved[12]["robot"] == "A"
+    state(t, "A", 12, role="A", status="dock"); assert t.reserved[15]["robot"] == "A" and not t.can_depart()
     state(t, "A", 15, role="A", status="dock"); assert not t.can_depart()
-    state(t, "A", 16, role="A", status="dock"); assert t.can_depart() and "A" not in t.intent
+    state(t, "A", 16, role="A", status="idle"); assert t.can_depart() and "A" not in t.intent
+    # 12에 와서야 배터리가 낮아도 거기선 정하지 않음 (확인은 13에서만): 한 바퀴 더
+    t = fresh(); f.roles.update({"A": "A"})
+    state(t, "A", 14, role="A", battery=80); state(t, "A", 13, role="A", battery=80)
+    assert state(t, "A", 12, role="A", battery=10) == [] and t.kind("A") == "patrol"
+    # 확인 지점(도크 길 밖)에서 잡은 도크 길은 7 · 12를 지나도 안 풀림 → 그사이 출발 안 함
+    t = fresh(); f.roles.update({"B": "B"})
+    state(t, "B", 9, role="B", battery=10); state(t, "B", 8, role="B", battery=10)
+    state(t, "B", 7, role="B", status="dock"); assert not t.can_depart()
+    state(t, "B", 12, role="B", status="dock"); state(t, "B", 15, role="B", status="dock"); assert not t.can_depart()
+    state(t, "B", 16, role="B", status="idle"); assert t.can_depart()
+    # B는 8을 서쪽(9 → 8)으로 올 때만 확인. 동쪽(7 → 8)은 아님
+    t = fresh(); f.roles.update({"B": "B"})
+    state(t, "B", 7, role="B", battery=10)
+    assert state(t, "B", 8, role="B", battery=10) == []
+    state(t, "B", 9, role="B", battery=10)
+    assert state(t, "B", 8, role="B", battery=10) == [("B", {"cmd": "dock"})] and t.next_marker("B") == 7
     # 도크 길을 다른 로봇이 쓰는 중이면 복귀하지 않고 한 바퀴 더
     t = fresh(); f.roles.update({"A": "A", "B": "C"})
     t.lanes[DOCK_LANE] = "C"
-    state(t, "A", 13, role="A", battery=10)
-    assert state(t, "A", 12, role="A", battery=10) == [] and t.kind("A") == "patrol" and t.next_marker("A") == 11
+    state(t, "A", 14, role="A", battery=10)
+    assert state(t, "A", 13, role="A", battery=10) == [] and t.kind("A") == "patrol" and t.next_marker("A") == 12
 
     # 4) 출발: 도크 길을 잡고 15를 예약. 출발한 로봇이 12를 지나 고리로 나가면 길이 풀림
     t = fresh(); f.roles.update({"A": "A"})
