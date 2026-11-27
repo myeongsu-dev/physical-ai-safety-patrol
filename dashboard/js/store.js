@@ -8,7 +8,7 @@ export const ROBOTS = ["A", "B", "C", "D"];
 
 // 화면에 보이는 로봇 이름. 서버·Pi와 주고받는 이름(ROBOT_ID)은 A~D 그대로 두고 화면에서만 바꾼다.
 // 팀 공통 이름으로 정함 (README "화면 용어")
-export const ROBOT_LABEL = { A: "MD-1", B: "MD-2", C: "MD-3", D: "MD-4" };
+export const ROBOT_LABEL = { A: "MD1", B: "MD2", C: "MD3", D: "MD4" };
 
 export function robotLabel(name) {
   return ROBOT_LABEL[name] ?? String(name);
@@ -134,7 +134,7 @@ function withRate(r) {
 // 안전모 미착용 기록 (관리자 화면 따로 칸, 사진 없음). 현장에서는 음성 안내로 처리하고, 대시보드는 기록만 본다.
 // 화면이 가진 경보 이력(이 화면을 연 뒤 받은 것 + 서버에서 꺼내 온 것)만 센다.
 //   today: 오늘 건수, total: 전체 건수, byMarker: 위치별 건수(많은 순), recent: 최근 기록(새것부터)
-export function helmetLog(store, now = Date.now(), recentMax = 5) {
+export function helmetLog(store, now = Date.now(), recentMax = 10) {
   const list = [...store.history.values()].map((h) => h.event).filter((e) => e.type === "helmet").sort((a, b) => b.id - a.id);
   const day = new Date(now).toDateString();
   const today = list.filter((e) => e.ts && new Date(e.ts * 1000).toDateString() === day).length;

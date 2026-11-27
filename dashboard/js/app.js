@@ -47,6 +47,7 @@ const ALERT_TEXT = {
   heat: ["과열", "fire"],
   obstacle: ["통로 차단", "warn"],
   floor_object: ["밟힘 주의", "warn"],
+  helmet: ["안전모 미착용", "warn"], // 기록 탭 안전모 칸에서 눌러 볼 때만 (팝업 · 경보음 · 경보 목록에는 안 나옴)
 };
 
 // 경보 알림 방식 (README "경보", 관리자 화면)
@@ -277,12 +278,46 @@ function renderRobots(s, serverOpen, now) {
         <div class="top"><span class="dot"></span><span class="name">${esc(robotLabel(r.name))}</span>
           <span class="state">${esc(state)}</span></div>
         <div class="place">${esc(robotPlace(msg))}</div>
-        ${stop ? `<div class="stop-reason">${esc(stop.reason ?? "현장 확인 필요")}</div>` : ""}
+        ${stop ? `<div class="stop-reason">${esc(stop.reason ?? "현장 확인 필요")}</div>${resumeHtml(r.name, stop)}` : ""}
         <div class="meta">${meta.join(" · ")}</div>
         ${versionLine(msg)}
       </li>`;
     })
     .join("");
+}
+
+// ---------- 다시 출발 (관리자 화면) ----------
+// 멈춘 로봇(관리자 stop, 안전 정지 ...)은 서버가 자동 출발시키지 않으므로 관리자가 현장을 확인하고 누른다.
+// POST /robots/{로봇}/cmd {"cmd": "resume"} (관리자 비밀번호 헤더). Pi는 hold를 풀고 하던 일로 돌아간다.
+// 교차 확인 대기(wait)는 서버가 진행 중인 것이라 버튼을 두지 않는다. 대피 안내(guide)는 대피가 끝나면 서버가 푼다 (PR #31)
+const resume = { pending: new Set(), error: null }; // error: { robot, text }
+
+function resumeHtml(robot, stop) {
+  if (stop.hold === "wait") return "";
+  const err = resume.error?.robot === robot ? `<p class="error">${esc(resume.error.text)}</p>` : "";
+  if (resume.pending.has(robot)) return `<button type="button" class="resume-btn" disabled>보내는 중</button>${err}`;
+  return `<button type="button" class="resume-btn" data-resume="${esc(robot)}">다시 출발</button>${err}`;
+}
+
+async function resumeRobot(robot) {
+  if (resume.pending.has(robot)) return;
+  resume.pending.add(robot);
+  resume.error = null;
+  render();
+  try {
+    const res = await adminRequest(`/robots/${encodeURIComponent(robot)}/cmd`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cmd: "resume" }),
+    });
+    if (!res.ok) throw new Error(`서버 응답 ${res.status}`);
+    // 로봇이 실제로 풀렸는지는 다음 state(hold)로 보인다
+  } catch (err) {
+    resume.error = { robot, text: `다시 출발을 보내지 못했습니다 (${err.message})` };
+  } finally {
+    resume.pending.delete(robot);
+    render();
+  }
 }
 
 // 지도 위 로봇 위치 (관리자 화면만)
@@ -419,9 +454,11 @@ function renderHelmet(now) {
   const top = h.byMarker.slice(0, 3).map((m) => `마커 ${esc(m.marker)} ${m.count}건`).join(", ");
   el.innerHTML = `<p class="helmet-count"><b>오늘 ${h.today}건</b> <span class="muted">받아 온 기록 ${h.total}건</span></p>
     ${top ? `<p class="helmet-where"><span class="muted">자주 나온 위치</span> ${top}</p>` : ""}
-    <table class="stat-table helmet-recent"><tbody>${h.recent.map((e) => `<tr>
-      <td>${e.ts ? whenText(e.ts) : "-"}</td><td>${e.marker != null ? `마커 ${esc(e.marker)}` : "-"}</td><td class="muted">${esc(robotLabel(e.robot))}</td>
-    </tr>`).join("")}</tbody></table>`;
+    <p class="helmet-hint muted">최근 ${h.recent.length}건. 누르면 사진과 위치</p>
+    <ul class="helmet-list">${h.recent.map((e) => `<li><button type="button" class="helmet-btn" data-alert="${e.id}">
+      <span>${e.ts ? whenText(e.ts) : "-"}</span><span>${e.marker != null ? `마커 ${esc(e.marker)}` : "-"}</span>
+      <span class="muted">${esc(robotLabel(e.robot))}</span><span class="helmet-photo${e.photo ? "" : " none"}">${e.photo ? "사진" : "사진 없음"}</span>
+    </button></li>`).join("")}</ul>`;
 }
 
 // 경보 시각: 오늘이면 시:분:초, 아니면 월.일 시:분
@@ -645,7 +682,8 @@ function renderPopup() {
       : `<div class="photo none">사진 없음</div>`;
     // 값은 사진 · 지도 아래 한 줄로 (오른쪽 좁은 칸에 넣으면 지도가 작아짐)
     body = `<div class="popup-body">${photo}<div class="popup-side">${mapSide}</div></div>${popupFields(e)}`;
-    actions = e.checked ? `<p class="done-text">${closedText(e)}</p>` : actionHtml(e) + errorHtml(e);
+    if (e.type === "helmet") actions = `<p class="done-text">현장에서 음성으로 안내함 (경보 해제 없음)</p>`;
+    else actions = e.checked ? `<p class="done-text">${closedText(e)}</p>` : actionHtml(e) + errorHtml(e);
   } else {
     body = `<div class="popup-body where-only"><div class="popup-side">${mapSide}</div></div>`;
   }
@@ -747,7 +785,7 @@ function closeViewer() {
 
 function onClick(ev) {
   const t = ev.target.closest?.(
-    "[data-alert], [data-check], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel], [data-evac-mute], [data-photo], [data-viewer-close], [data-more], [data-past-retry], [data-kpi], [data-pick], [data-tab]",
+    "[data-alert], [data-check], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel], [data-evac-mute], [data-photo], [data-viewer-close], [data-more], [data-past-retry], [data-kpi], [data-pick], [data-tab], [data-resume]",
   );
   // 경보 칸 목록 밖을 누르면 목록을 닫는다
   if (!t?.dataset.kpi && !ev.target.closest?.("#kpi-pick")) closePick();
@@ -758,6 +796,8 @@ function onClick(ev) {
     openPopup(Number(t.dataset.pick));
   } else if (t.dataset.tab) {
     setTab(t.dataset.tab);
+  } else if (t.dataset.resume) {
+    resumeRobot(t.dataset.resume);
   } else if (t.dataset.photo) {
     ev.preventDefault?.(); // 링크로 다른 페이지를 열지 않는다
     openViewer(t.dataset.photo);

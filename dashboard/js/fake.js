@@ -349,6 +349,16 @@ export class FakeServer {
       this._push({ ...e });
       return jsonResponse(200, { ...e });
     }
+    m = path.match(/^\/robots\/([A-Z])\/cmd$/);
+    if (m && method === "POST") {
+      const r = this.robots[m[1]];
+      if (!r) return jsonResponse(404, { detail: "모르는 로봇" });
+      if (body.cmd === "stop") r.halt("stop");
+      else if (body.cmd === "resume") r.resume();
+      else return jsonResponse(400, { detail: "가짜 서버는 stop · resume만" });
+      this._push(this._stateMsg(r));
+      return jsonResponse(200, { sent: [{ topic: `potent/${r.name}/cmd`, msg: { cmd: body.cmd } }] });
+    }
     if (path === "/mode" && method === "POST") {
       if (!MODES.includes(body.mode)) return jsonResponse(400, { detail: "모르는 모드: " + body.mode });
       this.setMode(body.mode);

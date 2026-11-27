@@ -594,3 +594,44 @@ ul { list-style: none; margin: 0; padding: 0; }
 }
 .more-btn:hover { background: var(--bg); }
 .more-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+
+/* ---------- 멈춘 로봇: 다시 출발 (관리자 화면) ---------- */
+.resume-btn {
+  margin-top: 6px;
+  padding: 3px 12px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--warn);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.resume-btn:hover { background: var(--warn-bg); }
+.resume-btn:disabled { opacity: 0.6; cursor: default; }
+.resume-btn:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+.robot-cards .error { margin: 4px 0 0; }
+
+/* ---------- 안전모 미착용 기록: 줄을 누르면 사진 팝업 ---------- */
+.helmet-hint { margin: 4px 0 2px; }
+.helmet-list { margin: 0; padding: 0; list-style: none; }
+.helmet-btn {
+  display: grid;
+  grid-template-columns: 78px 1fr auto auto;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--radius);
+  background: none;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.helmet-btn:hover { background: var(--bg); }
+.helmet-btn:focus-visible { outline: 2px solid var(--text); outline-offset: -2px; }
+.helmet-photo { color: var(--text); text-decoration: underline; }
+.helmet-photo.none { color: var(--muted); text-decoration: none; }
