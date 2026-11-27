@@ -22,7 +22,7 @@ heat 이벤트는 events.HeatCheck로 교차 확인해 출동·대피 명령을 
 헤더 X-Admin-Password가 맞을 때만 받는다 (틀리면 401). 비워 두면 잠그지 않는다 (개발용).
 
 대피 안내: evacuate가 되면 dispatch.plan으로 마커마다 출구 방향을 구해 대시보드에
-{"kind": "evac", "fire": 불난 마커 또는 null, "exits": [5, 8], "arrows": [{"marker", "dir", "exit", "path"}, ...]}를 보내고,
+{"kind": "evac", "fire": 불난 마커 또는 null, "exits": [5, 9], "arrows": [{"marker", "dir", "exit", "path"}, ...]}를 보내고,
 마커와 보는 방향을 아는 로봇에는 guide(arrow)를 보낸다 (도크에서 쉬는 로봇은 뺌).
 normal로 돌아가면 대피 안내도 끝 (mode 메시지로 앎). 서버가 guide를 보낸 로봇에는 resume을 보내 하던 순찰로 돌려보낸다.
 그사이 관리자 stop이나 안전 정지로 hold가 guide가 아니게 된 로봇은 풀지 않는다 (사람이 확인하고 POST /robots/…/cmd resume).
@@ -375,8 +375,8 @@ def selfcheck():
         srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0], auto_start=False)
         with TestClient(create_app(srv)) as c:
             # 로봇 두 대가 state를 보내면 대시보드 WebSocket에 붙자마자 보인다
-            srv.on_mqtt("potent/A/state", protocol.pack({"marker": 15, "status": "idle", "battery": 90, "hold": None}))
-            srv.on_mqtt("potent/B/state", protocol.pack({"marker": 15, "status": "idle", "battery": 70, "hold": None}))
+            srv.on_mqtt("potent/A/state", protocol.pack({"marker": 16, "status": "idle", "battery": 90, "hold": None}))
+            srv.on_mqtt("potent/B/state", protocol.pack({"marker": 16, "status": "idle", "battery": 70, "hold": None}))
             srv.on_mqtt("potent/B/state", b"not json")                  # 깨진 건 버림
             with c.websocket_connect("/ws") as ws:
                 first = [ws.receive_json() for _ in range(3)]
@@ -457,7 +457,7 @@ def selfcheck():
             for n, (m1, m2) in (("A", (10, 5)), ("B", (3, 4)), ("C", (11, 12))):
                 srv.on_mqtt(f"potent/{n}/state", protocol.pack({"marker": m1, "status": "patrol", "battery": 80, "hold": None}))
                 srv.on_mqtt(f"potent/{n}/state", protocol.pack({"marker": m2, "status": "patrol", "battery": 80, "hold": None}))
-            srv.on_mqtt("potent/D/state", protocol.pack({"marker": 15, "status": "idle", "battery": 90, "hold": None}))
+            srv.on_mqtt("potent/D/state", protocol.pack({"marker": 16, "status": "idle", "battery": 90, "hold": None}))
             c.post("/mode", json={"mode": "evacuate"})
             assert srv.guided == {"A", "B", "C"}                       # D는 도크에서 쉬는 중이라 guide 안 받음
             srv.on_mqtt("potent/A/state", protocol.pack({"marker": 5, "status": "guide", "battery": 80, "hold": "guide"}))
@@ -475,9 +475,9 @@ def selfcheck():
         now[0] += 100
         srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0])
         with TestClient(create_app(srv)) as c:
-            srv.on_mqtt("potent/A/state", protocol.pack({"marker": 15, "status": "idle", "battery": 70, "hold": None}))
-            srv.on_mqtt("potent/B/state", protocol.pack({"marker": 15, "status": "idle", "battery": 90, "hold": None}))
-            srv.on_mqtt("potent/C/state", protocol.pack({"marker": 15, "status": "idle", "battery": 99, "hold": "stop"}))
+            srv.on_mqtt("potent/A/state", protocol.pack({"marker": 16, "status": "idle", "battery": 70, "hold": None}))
+            srv.on_mqtt("potent/B/state", protocol.pack({"marker": 16, "status": "idle", "battery": 90, "hold": None}))
+            srv.on_mqtt("potent/C/state", protocol.pack({"marker": 16, "status": "idle", "battery": 99, "hold": "stop"}))
             srv.sent.clear()
             srv.tick()
             assert srv.sent == [("potent/B/cmd", {"cmd": "patrol", "role": "A"}),
@@ -488,12 +488,12 @@ def selfcheck():
             c.post("/mode", json={"mode": "evacuate"})
             now[0] += 60
             for n, b, h in (("A", 70, None), ("B", 90, None), ("C", 99, "stop")):
-                srv.on_mqtt(f"potent/{n}/state", protocol.pack({"marker": 15, "status": "idle", "battery": b, "hold": h}))
+                srv.on_mqtt(f"potent/{n}/state", protocol.pack({"marker": 16, "status": "idle", "battery": b, "hold": h}))
             srv.tick()
             assert not [m for _, m in srv.sent if m.get("cmd") == "patrol"]   # 대피 중엔 출발 안 함
             c.post("/mode", json={"mode": "normal"})
             # 관리자가 resume을 보내 Pi가 hold를 풀면 다시 대상 (여기선 Pi 대신 state로)
-            srv.on_mqtt("potent/C/state", protocol.pack({"marker": 15, "status": "idle", "battery": 99, "hold": None}))
+            srv.on_mqtt("potent/C/state", protocol.pack({"marker": 16, "status": "idle", "battery": 99, "hold": None}))
             srv.sent.clear()
             srv.tick()
             assert srv.sent[0] == ("potent/C/cmd", {"cmd": "patrol", "role": "A"}), srv.sent

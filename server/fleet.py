@@ -116,9 +116,9 @@ class Fleet:
 if __name__ == "__main__":
     now = [1000.0]
     f = Fleet(clock=lambda: now[0])
-    f.update_state("A", {"status": "idle", "battery": 60, "marker": 15, "hold": None})
-    f.update_state("B", {"status": "idle", "battery": 90, "marker": 15, "hold": None})
-    f.update_state("C", {"status": "idle", "battery": 20, "marker": 15})   # 배터리 부족 → 제외
+    f.update_state("A", {"status": "idle", "battery": 60, "marker": 16, "hold": None})
+    f.update_state("B", {"status": "idle", "battery": 90, "marker": 16, "hold": None})
+    f.update_state("C", {"status": "idle", "battery": 20, "marker": 16})   # 배터리 부족 → 제외
     sent = f.auto_assign()
     assert sent == [("potent/B/cmd", {"cmd": "patrol", "role": "A"}),
                     ("potent/A/cmd", {"cmd": "patrol", "role": "B"})], sent
@@ -147,12 +147,12 @@ if __name__ == "__main__":
     g = Fleet(clock=lambda: now[0])
     g.update_state("D", {"status": "patrol", "battery": 70, "role": "B"})
     assert g.roles == {"B": "D"}
-    # 서버 자동 출발: 도크(15)에서 쉬고 배터리 BATTERY_START 이상인 로봇만, 배터리 많은 순
+    # 서버 자동 출발: 도크(16)에서 쉬고 배터리 BATTERY_START 이상인 로봇만, 배터리 많은 순
     h = Fleet(clock=lambda: now[0])
-    h.update_state("A", {"status": "idle", "battery": 70, "marker": 15, "hold": None})
-    h.update_state("B", {"status": "idle", "battery": 95, "marker": 15, "hold": None})
+    h.update_state("A", {"status": "idle", "battery": 70, "marker": 16, "hold": None})
+    h.update_state("B", {"status": "idle", "battery": 95, "marker": 16, "hold": None})
     h.update_state("C", {"status": "idle", "battery": 99, "marker": 6, "hold": None})    # 길 중간에서 멈춤 → 제외
-    h.update_state("D", {"status": "idle", "battery": 40, "marker": 15, "hold": None})   # 충전 덜 됨 → 제외
+    h.update_state("D", {"status": "idle", "battery": 40, "marker": 16, "hold": None})   # 충전 덜 됨 → 제외
     assert h.auto_assign(auto=True) == [("potent/B/cmd", {"cmd": "patrol", "role": "A"}),
                                         ("potent/A/cmd", {"cmd": "patrol", "role": "B"})]
     # 보드 응답을 기다리는 동안(아직 idle) 1초 뒤 다시 불러도 또 보내지 않음
@@ -161,24 +161,24 @@ if __name__ == "__main__":
     # START_GRACE_S가 지나도 순찰로 안 바뀌면 그 역할은 비었다고 보고 다시 고름
     now[0] += START_GRACE_S
     for n, b in (("A", 70), ("B", 95), ("C", 99), ("D", 40)):
-        h.update_state(n, {"status": "idle", "battery": b, "marker": 15 if n != "C" else 6, "hold": None})
+        h.update_state(n, {"status": "idle", "battery": b, "marker": 16 if n != "C" else 6, "hold": None})
     assert len(h.auto_assign(auto=True)) == 2
     # 내보내면 안 되는 로봇은 빼고
     now[0] += START_GRACE_S
-    h.update_state("A", {"status": "idle", "battery": 70, "marker": 15, "hold": None})
+    h.update_state("A", {"status": "idle", "battery": 70, "marker": 16, "hold": None})
     h.update_state("B", {"status": "patrol", "battery": 95, "marker": 3, "role": "A"})
-    h.update_state("D", {"status": "idle", "battery": 80, "marker": 15, "hold": None})
+    h.update_state("D", {"status": "idle", "battery": 80, "marker": 16, "hold": None})
     assert h.auto_assign(auto=True, exclude={"D"}) == [("potent/A/cmd", {"cmd": "patrol", "role": "B"})]
     # 정지 이유(hold)가 있거나 hold 칸이 없는 로봇(예전 Pi)은 안 내보냄
     k = Fleet(clock=lambda: now[0])
-    k.update_state("A", {"status": "idle", "battery": 99, "marker": 15, "hold": "line"})   # 도크 나가자마자 선 놓침
-    k.update_state("B", {"status": "idle", "battery": 98, "marker": 15})                  # hold 칸 없음
-    k.update_state("C", {"status": "idle", "battery": 97, "marker": 15, "hold": "no_ack"}) # 보드가 답 안 함
+    k.update_state("A", {"status": "idle", "battery": 99, "marker": 16, "hold": "line"})   # 도크 나가자마자 선 놓침
+    k.update_state("B", {"status": "idle", "battery": 98, "marker": 16})                  # hold 칸 없음
+    k.update_state("C", {"status": "idle", "battery": 97, "marker": 16, "hold": "no_ack"}) # 보드가 답 안 함
     assert k.auto_assign(auto=True) == [] and k.auto_assign() == []
-    k.update_state("A", {"status": "idle", "battery": 99, "marker": 15, "hold": None})    # 사람이 확인하고 풂
+    k.update_state("A", {"status": "idle", "battery": 99, "marker": 16, "hold": None})    # 사람이 확인하고 풂
     assert k.auto_assign(auto=True)[0] == ("potent/A/cmd", {"cmd": "patrol", "role": "A"})
     # 충전 끝난 가짜 로봇은 status dock으로 도크에 있음
-    k.update_state("D", {"status": "dock", "battery": 100, "marker": 15, "hold": None})
+    k.update_state("D", {"status": "dock", "battery": 100, "marker": 16, "hold": None})
     assert k.auto_assign(auto=True) == [("potent/D/cmd", {"cmd": "patrol", "role": "B"})]
     # 처음 켜서 마커를 아직 못 읽음(None) → 도크로 봄. 마커를 본 적 있는 로봇이 None이면(Pi만 재부팅) 아님
     j = Fleet(clock=lambda: now[0])

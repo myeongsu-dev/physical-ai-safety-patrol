@@ -56,7 +56,7 @@ def _dist(a, b):
 
 def plan(fire=None, exits=None):
     """마커마다 대피 방향. fire: 불난 마커(모르면 None), exits: 출구 마커들 (기본 map_config.EXITS)
-    돌려주는 것: [{"marker": 1, "dir": "S", "exit": 15, "path": [1, 5, 10, 11, 14, 15]}, ...] 마커 번호 순
+    돌려주는 것: [{"marker": 1, "dir": "S", "exit": 5, "path": [1, 5]}, ...] 마커 번호 순
     출구에 있으면 dir "here", 갈 수 없거나 불난 마커면 dir "x" · exit None · path []"""
     exits = [e for e in (exits or map_config.EXITS) if e != fire]
     nb = edges()
@@ -122,28 +122,30 @@ if __name__ == "__main__":
 
     nb = edges()
     assert all(nb[m] for m in map_config.MARKERS), "어디와도 안 이어진 마커"
-    assert nb[14] == {15, 11, 9, 12} and nb[2] == {1, 3, 6}, (nb[14], nb[2])
-    assert compass(1, 2) == "E" and compass(10, 5) == "N" and compass(14, 15) == "S"
-    # 불 없음, 출구 15(도크): 모두 15로. 14는 바로 아래(S), 15는 here
-    p = {a["marker"]: a for a in plan(exits=[15])}
-    assert p[15]["dir"] == "here" and p[14] == {"marker": 14, "dir": "S", "exit": 15, "path": [14, 15]}
-    assert all(a["path"][-1] == 15 for a in p.values())
-    # 9에서 불: 9를 지나던 경로는 돌아감, 9는 x
-    p = {a["marker"]: a for a in plan(fire=9, exits=[15])}
-    assert p[9]["dir"] == "x" and all(9 not in a["path"] for a in p.values())
-    assert p[6]["path"][-1] == 15
-    # 출구로 가는 유일한 길(14)에서 불: 모두 갈 수 없음(x)
-    p = {a["marker"]: a for a in plan(fire=14, exits=[15])}
-    assert all(a["dir"] == "x" for m, a in p.items() if m != 15)
+    grid = {(1, 2), (2, 3), (3, 4), (1, 5), (2, 6), (3, 8), (4, 9), (5, 6), (6, 7), (7, 8), (8, 9),
+            (5, 10), (7, 12), (9, 14), (10, 11), (11, 12), (12, 13), (13, 14), (12, 15), (15, 16)}
+    assert {(x, y) for x in nb for y in nb[x] if x < y} == grid, "ROUTES로 이은 길이 지도 격자와 다름"
+    assert compass(1, 2) == "E" and compass(10, 5) == "N" and compass(15, 16) == "S"
+    # 불 없음, 출구 16(도크): 모두 16으로. 15는 바로 아래(S), 16은 here
+    p = {a["marker"]: a for a in plan(exits=[16])}
+    assert p[16]["dir"] == "here" and p[15] == {"marker": 15, "dir": "S", "exit": 16, "path": [15, 16]}
+    assert all(a["path"][-1] == 16 for a in p.values())
+    # 7에서 불: 7을 지나던 경로는 돌아감, 7은 x
+    p = {a["marker"]: a for a in plan(fire=7, exits=[16])}
+    assert p[7]["dir"] == "x" and all(7 not in a["path"] for a in p.values())
+    assert p[6]["path"][-1] == 16
+    # 도크로 가는 유일한 길(15)에서 불: 모두 갈 수 없음(x)
+    p = {a["marker"]: a for a in plan(fire=15, exits=[16])}
+    assert all(a["dir"] == "x" for m, a in p.items() if m != 16)
     # 출구가 둘이면 가까운 쪽으로
-    p = {a["marker"]: a for a in plan(exits=[15, 1])}
-    assert p[2]["exit"] == 1 and p[2]["dir"] == "W" and p[12]["exit"] == 15
-    # 팀이 정한 출구(5, 8): 모두 둘 중 가까운 쪽으로, 5에서 불나면 8로
+    p = {a["marker"]: a for a in plan(exits=[16, 1])}
+    assert p[2]["exit"] == 1 and p[2]["dir"] == "W" and p[13]["exit"] == 16
+    # 팀이 정한 출구(5, 9): 모두 둘 중 가까운 쪽으로, 5에서 불나면 9로
     p = {a["marker"]: a for a in plan()}
-    assert map_config.EXITS == [5, 8] and p[5]["dir"] == p[8]["dir"] == "here"
-    assert p[1]["exit"] == 5 and p[4]["exit"] == 8 and p[15]["path"][0] == 15 and p[15]["exit"] in (5, 8)
+    assert map_config.EXITS == [5, 9] and p[5]["dir"] == p[9]["dir"] == "here"
+    assert p[1]["exit"] == 5 and p[4]["exit"] == 9 and p[16]["path"][0] == 16 and p[16]["exit"] in (5, 9)
     p = {a["marker"]: a for a in plan(fire=5)}
-    assert all(a["exit"] == 8 for m, a in p.items() if m != 5)
+    assert all(a["exit"] == 9 for m, a in p.items() if m != 5)
     # 로봇 화살표: 북쪽을 보는 로봇에게 동쪽이면 right, 서쪽이면 left, 남쪽(뒤)은 펌웨어에 down이 없어 x
     assert robot_arrow("E", "N") == "right" and robot_arrow("W", "N") == "left" and robot_arrow("N", "N") == "up"
     assert robot_arrow("S", "N") == "x" and robot_arrow("E", None) is None and robot_arrow("here", None) == "x"
@@ -155,12 +157,12 @@ if __name__ == "__main__":
     f.update_state("A", {"marker": 5, "status": "patrol", "battery": 80})    # 10 → 5: 북쪽으로 가는 중
     f.update_state("B", {"marker": 3, "status": "patrol", "battery": 80})    # 방향 모름
     assert f.heading == {"A": "N"}
-    cmds = guide_commands(f, plan(exits=[15]))
-    assert cmds == [("A", {"cmd": "guide", "arrow": "x"})], cmds          # 5에서 15로는 남쪽(뒤)
+    cmds = guide_commands(f, plan(exits=[10]))
+    assert cmds == [("A", {"cmd": "guide", "arrow": "x"})], cmds          # 5에서 10으로는 남쪽(뒤)
     p = {a["marker"]: a for a in plan(exits=[1])}
     assert p[5]["dir"] == "N" and guide_commands(f, plan(exits=[1])) == [("A", {"cmd": "guide", "arrow": "up"})]
     # 도크에서 쉬는 로봇에는 guide 안 보냄
-    f.update_state("C", {"marker": 14, "status": "patrol", "battery": 80})
-    f.update_state("C", {"marker": 15, "status": "idle", "battery": 80})    # 14 → 15: 도크에 들어와 쉼
+    f.update_state("C", {"marker": 15, "status": "patrol", "battery": 80})
+    f.update_state("C", {"marker": 16, "status": "idle", "battery": 80})    # 15 → 16: 도크에 들어와 쉼
     assert "C" not in {r for r, _ in guide_commands(f, plan())}
     print("dispatch ok: 불 없음 →", {a["marker"]: a["dir"] for a in plan()})
