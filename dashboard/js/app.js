@@ -300,7 +300,8 @@ function renderRobots(s, serverOpen, now) {
 const resume = { pending: new Set(), error: null }; // error: { robot, text }
 
 function resumeHtml(robot, stop) {
-  if (stop.hold === "wait") return "";
+  // 배터리 부족 정지는 다시 출발을 보내도 Pi가 받지 않는다 (충전이 먼저)
+  if (stop.hold === "wait" || stop.hold === "battery") return "";
   const err = resume.error?.robot === robot ? `<p class="error">${esc(resume.error.text)}</p>` : "";
   if (resume.pending.has(robot)) return `<button type="button" class="resume-btn" disabled>보내는 중</button>${err}`;
   return `<button type="button" class="resume-btn" data-resume="${esc(robot)}">다시 출발</button>${err}`;

@@ -210,6 +210,8 @@ export function evacView(store) {
 // reason: hold를 화면 말로. hold가 없으면 null (화면은 "현장 확인 필요")
 export const HOLD_TEXT = {
   wait: "서버 대기: 길이 비면 서버가 다시 출발시킴",
+  server: "서버 연결 끊김으로 정지", // 이슈 #39: 서버 신호가 끊겨 단독 모드로 다음 마커에서 멈춤
+  battery: "배터리 부족으로 정지: 충전 스테이션으로 옮겨 주세요", // 15% 이하. 배터리가 그대로면 Pi가 patrol · resume을 안 받음
   stop: "관리자 정지",
   guide: "대피 안내 중",
   link: "안전 정지: 보드 연결 끊김",

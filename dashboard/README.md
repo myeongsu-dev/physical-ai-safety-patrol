@@ -120,8 +120,8 @@
 - 멈춤: "대기"인데 state에 멈춘 이유(`hold`)가 있거나, 충전 스테이션이 아닌 곳에 있는 로봇 (이슈 #22). 카드는 주황 테두리와 "멈춤", 지도는 주황 테두리. 안전 현황 단계는 올리지 않습니다
   - 서버 대기(`hold`가 `wait`): 서버가 길이 빌 때까지(교통 정리, server PR #35) 또는 교차 확인 동안 세운 것. 멈춤으로 보지 않고 카드에 "서버 대기", 요약 줄은 순찰 중으로 셉니다. 서버가 다시 출발시킵니다
   - 서버는 `hold`가 있는 로봇을 자동 출발시키지 않습니다 (server/fleet.py). 그래서 충전 스테이션에 있어도 `hold`가 있으면 멈춤으로 보여 줘야 관리자가 왜 안 나가는지 압니다
-  - 멈춘 로봇 카드에 "다시 출발" 버튼: 관리자가 현장을 확인하고 누르면 서버에 resume을 보내 `hold`를 풉니다. 서버 대기(`wait`)는 멈춤이 아니라 버튼이 없고, 대피 안내(`guide`)는 대피가 끝나면 서버가 풉니다
-  - `hold` 값(edge/agent.py: wait, stop, guide, link, stream, no_ack, board, send, line, not_ready, exit)은 "안전 정지: 선을 놓침" 같은 말로 보여 줍니다 (js/store.js HOLD_TEXT). `hold`가 없으면 "현장 확인 필요"
+  - 멈춘 로봇 카드에 "다시 출발" 버튼: 관리자가 현장을 확인하고 누르면 서버에 resume을 보내 `hold`를 풉니다. 서버 대기(`wait`)는 멈춤이 아니라 버튼이 없고, 배터리 부족 정지(`battery`)는 충전이 먼저라 버튼이 없고, 대피 안내(`guide`)는 대피가 끝나면 서버가 풉니다
+  - `hold` 값(edge/agent.py: wait, stop, guide, link, stream, no_ack, board, send, line, not_ready, exit, server, battery)은 "안전 정지: 선을 놓침" 같은 말로 보여 줍니다 (js/store.js HOLD_TEXT). `hold`가 없으면 "현장 확인 필요"
 - 배터리: 25% 이하면 충전 스테이션으로 복귀, 15% 이하면 그 자리에 멈춤 (`server/map_config.py`, 시험 뒤 바뀔 수 있음)
 - 프로그램 버전: 로봇마다 돌고 있는 Pi 프로그램의 git 커밋
 

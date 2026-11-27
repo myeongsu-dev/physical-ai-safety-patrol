@@ -1049,6 +1049,9 @@ class FakeAudioContext {
   assert.ok(holds.size >= 10, `edge/agent.py에서 hold 값을 못 찾음: ${[...holds]}`);
   for (const h of holds) assert.ok(h in HOLD_TEXT, `HOLD_TEXT에 ${h} 문구 없음 (edge/agent.py)`);
   assert.deepEqual(robotStop({ status: "idle", marker: 7, hold: "new_one" }), { hold: "new_one", reason: "new_one" }, "모르는 이유는 그대로");
+  // 이슈 #39 · 엣지 PR #47이 더하는 값
+  assert.equal(robotStop({ status: "idle", marker: 1, hold: "server" }).reason, "서버 연결 끊김으로 정지");
+  assert.match(robotStop({ status: "idle", marker: 1, hold: "battery" }).reason, /^배터리 부족으로 정지/);
 
   // 지도: 멈춘 로봇은 주황 테두리
   assert.ok(robotLayer([{ name: "MD-1", marker: 7, online: true, stopped: true }]).includes("#ff9f1a"));
