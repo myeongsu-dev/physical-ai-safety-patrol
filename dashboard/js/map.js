@@ -1,7 +1,7 @@
 // 미션맵 지도 (바탕만). 대시보드 계획 페이지의 관제 지도를 옮긴 것.
 // 배치는 미션맵 약도 그대로, 코너는 직각, QR 대신 마커 번호.
 // 좌표는 약도 이미지를 옮긴 값(2000 x 1444 기준)이라 server/map_config.py의 xy(원본 사진 기준)와는 다르다.
-// 마커 번호 1~15는 같다.
+// 마커 번호는 같다 (1~16).
 //
 // 바탕(baseMap)에는 경보 위치, 로봇 위치, 대피 화살표를 그리지 않는다. 받은 데이터로 위에 얹는 층은 아래 fireLayer · guideLayer · robotLayer.
 
@@ -21,11 +21,13 @@ export const SEGMENTS = [
 ];
 
 // 마커 번호 위치
+// 마커 1~16 배치 (11/27 회의 시안). 위 줄 1~4, 가운데 줄 5~9 (7은 가운데 갈림길),
+// 아래 줄 10~14 (12는 가운데 갈림길), 15는 아래 줄기, 16은 충전 스테이션
 export const MARKER_POS = {
   1: [340, 160], 2: [773, 160], 3: [1220, 160], 4: [1650, 160],
-  5: [340, 553], 6: [773, 553], 7: [1220, 553], 8: [1650, 553],
-  9: [1000, 690], 10: [340, 890], 11: [870, 890], 12: [1150, 890],
-  13: [1650, 890], 14: [1000, 1090], 15: [1000, 1268],
+  5: [340, 553], 6: [773, 553], 7: [1000, 553], 8: [1220, 553], 9: [1650, 553],
+  10: [340, 890], 11: [670, 890], 12: [1000, 890], 13: [1325, 890], 14: [1650, 890],
+  15: [1000, 1090], 16: [1000, 1268],
 };
 
 // 구역 (랙이 있는 칸)
@@ -254,7 +256,7 @@ function swatch(inner) {
 export function legendHtml({ robots = false } = {}) {
   const items = [
     swatch(`<line x1="1" y1="9" x2="29" y2="9" stroke="${C.one}" stroke-width="3" stroke-dasharray="7 4"/>`) + "순찰 통로",
-    swatch(`<rect x="7" y="1" width="16" height="16" rx="3" fill="#0b1626" stroke="${C.yellow}" stroke-width="2"/>`) + "마커 번호 1~15",
+    swatch(`<rect x="7" y="1" width="16" height="16" rx="3" fill="#0b1626" stroke="${C.yellow}" stroke-width="2"/>`) + `마커 번호 1~${Object.keys(MARKER_POS).length}`,
     swatch(`<rect x="3" y="2" width="24" height="14" fill="#0f3a24" stroke="${C.green}" stroke-width="2"/>`) + "비상구",
     swatch(`<rect x="3" y="2" width="24" height="14" fill="none" stroke="${C.wall}" stroke-width="2" stroke-dasharray="4 3"/>`) + "충전 스테이션",
   ];
