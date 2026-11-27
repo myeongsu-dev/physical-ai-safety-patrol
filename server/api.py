@@ -23,7 +23,9 @@ heat 이벤트는 events.HeatCheck로 교차 확인해 출동·대피 명령을 
 
 대피 안내: evacuate가 되면 dispatch.plan으로 마커마다 출구 방향을 구해 대시보드에
 {"kind": "evac", "fire": 불난 마커 또는 null, "exits": [5, 8], "arrows": [{"marker", "dir", "exit", "path"}, ...]}를 보내고,
-마커와 보는 방향을 아는 로봇에는 guide(arrow)를 보낸다. normal로 돌아가면 대피 안내도 끝 (mode 메시지로 앎).
+마커와 보는 방향을 아는 로봇에는 guide(arrow)를 보낸다 (도크에서 쉬는 로봇은 뺌).
+normal로 돌아가면 대피 안내도 끝 (mode 메시지로 앎). 서버가 guide를 보낸 로봇에는 resume을 보내 하던 순찰로 돌려보낸다.
+그사이 관리자 stop이나 안전 정지로 hold가 guide가 아니게 된 로봇은 풀지 않는다 (사람이 확인하고 POST /robots/…/cmd resume).
 
 출발은 서버 자동 (normal 모드일 때 1초마다): 빈 역할이 있으면 도크에서 쉬는 로봇 중 배터리가 가장 많은 로봇에 patrol.
 Pi가 state에 hold(정지 이유: stop · line · board · no_ack ...)를 보내면 자동 출발에서 뺀다.
@@ -95,6 +97,7 @@ class Server:
         self.clock = clock
         self.auto_start = auto_start
         self.evac = None    # 대피 중이면 대시보드로 보낸 대피 안내
+        self.guided = set() # 이번 대피에서 guide를 보낸 로봇 (대피가 끝나면 resume으로 풂)
         self.admin_password = admin_password or None   # 없으면 잠그지 않음
         self.fleet = Fleet(clock=clock)
         self.linked = {}    # 로봇 → 지난번에 본 연결 상태 (끊김·다시 붙음을 화면에 알리려고)
@@ -208,6 +211,7 @@ class Server:
     def set_mode(self, mode):
         if mode not in protocol.MODES:
             raise ValueError("모르는 모드: " + str(mode))
+        was = self.mode
         self.mode = mode
         if mode == "normal":
             self.heat.reset()
@@ -216,6 +220,8 @@ class Server:
         self.hub.push({"kind": "mode", "mode": mode})
         if mode == "evacuate":
             self.start_evac()
+        elif was == "evacuate":
+            self.end_evac()
 
     def start_evac(self):
         """마커마다 출구 방향을 구해 대시보드로 보내고, 로봇마다 화살표(guide)를 보낸다"""
@@ -226,6 +232,18 @@ class Server:
         for robot, cmd in dispatch.guide_commands(self.fleet, arrows):
             log.info("대피 안내 %s 화살표 %s", robot, cmd["arrow"])
             self.publish(protocol.topic(robot, "cmd"), cmd)
+            self.guided.add(robot)
+
+    def end_evac(self):
+        """대피 해제: 서버가 guide로 세운 로봇을 resume으로 풀어 하던 순찰로. 다른 이유로 멈춘 로봇은 그대로"""
+        for robot in sorted(self.guided):
+            hold = self.fleet.robots.get(robot, {}).get("hold", "guide")   # hold 칸이 없는 Pi면 guide로 봄
+            if hold not in ("guide", None):
+                log.info("대피 끝, %s는 %s로 멈춰 있어 풀지 않음", robot, hold)
+                continue
+            log.info("대피 끝, %s 다시 출발", robot)
+            self.publish(protocol.topic(robot, "cmd"), protocol.command("resume"))
+        self.guided.clear()
 
     def is_admin(self, password):
         if not self.admin_password:
@@ -414,6 +432,7 @@ def selfcheck():
             arrows = {a["marker"]: a for a in srv.evac["arrows"]}
             assert srv.evac["fire"] == 7 and arrows[7]["dir"] == "x" and all(7 not in a["path"] for a in arrows.values())
             assert any(m.get("kind") == "evac" for m in srv.snapshot())     # 새로 연 대시보드도 받음
+            assert srv.guided == {"A", "B"}, srv.guided              # 둘 다 현장(7·4번)에 있음
             # 연결 끊김: A만 계속 보내고 B는 조용 → ONLINE_SEC 넘으면 화면에 B online false 한 번
             with c.websocket_connect("/ws") as ws:
                 n = len(srv.snapshot())
@@ -431,6 +450,27 @@ def selfcheck():
                 assert m["robot"] == "B" and m["online"] is True
             assert ("potent/mode", {"mode": "evacuate"}) in srv.sent
             assert c.get("/status").json()["roles"] == {"A": "A", "B": "B"}
+        # 대피 해제: 서버가 guide로 세운 로봇만 resume. 그사이 관리자 stop · 안전 정지된 로봇, 도크 로봇은 그대로
+        now[0] += 100
+        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0], auto_start=False)
+        with TestClient(create_app(srv)) as c:
+            for n, (m1, m2) in (("A", (10, 5)), ("B", (3, 4)), ("C", (11, 12))):
+                srv.on_mqtt(f"potent/{n}/state", protocol.pack({"marker": m1, "status": "patrol", "battery": 80, "hold": None}))
+                srv.on_mqtt(f"potent/{n}/state", protocol.pack({"marker": m2, "status": "patrol", "battery": 80, "hold": None}))
+            srv.on_mqtt("potent/D/state", protocol.pack({"marker": 15, "status": "idle", "battery": 90, "hold": None}))
+            c.post("/mode", json={"mode": "evacuate"})
+            assert srv.guided == {"A", "B", "C"}                       # D는 도크에서 쉬는 중이라 guide 안 받음
+            srv.on_mqtt("potent/A/state", protocol.pack({"marker": 5, "status": "guide", "battery": 80, "hold": "guide"}))
+            srv.on_mqtt("potent/B/state", protocol.pack({"marker": 4, "status": "idle", "battery": 80, "hold": "stop"}))
+            srv.on_mqtt("potent/C/state", protocol.pack({"marker": 12, "status": "guide", "battery": 80}))   # hold 칸 없는 Pi
+            srv.sent.clear()
+            c.post("/mode", json={"mode": "normal"})
+            resumed = sorted(t.split("/")[1] for t, m in srv.sent if m.get("cmd") == "resume")
+            assert resumed == ["A", "C"], srv.sent                     # B(관리자 stop)는 그대로
+            assert srv.guided == set()
+            srv.sent.clear()
+            c.post("/mode", json={"mode": "normal"})                    # normal → normal은 아무것도 안 함
+            assert not [m for _, m in srv.sent if m.get("cmd") == "resume"]
         # 자동 출발: 도크에서 쉬는 로봇 중 배터리 많은 순, 관리자가 세운 로봇과 대피 중엔 안 함
         now[0] += 100
         srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0])
