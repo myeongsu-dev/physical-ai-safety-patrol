@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { MARKERS, ROUTES, DOCK_MARKER, BATTERY_RETURN, RETURN_POINT, EXITS } from "./js/mapdata.js";
 import { FakeServer, EVENT_TYPES, evacPlan } from "./js/fake.js";
-import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, evacView, loadHistory, alarmStats, robotStop, helmetLog, ONLINE_SEC } from "./js/store.js";
+import { createStore, apply, setServer, robotOnline, connectionSummary, safetySummary, openAlerts, robotPlace, robotLabel, evacView, loadHistory, alarmStats, robotStop, robotWaiting, helmetLog, ONLINE_SEC } from "./js/store.js";
 import { robotLayer, fireLayer, guideLayer, corridorPoints, MARKER_POS } from "./js/map.js";
 import { checkAdmin, withPassword, ADMIN_HEADER } from "./js/auth.js";
 
@@ -132,8 +132,8 @@ assert.ok(!fake._snapshot().some((m) => m.kind === "evac"), "평상시로 돌아
   const T = 1_000_000;
   setServer(st, "open", T);
   // 처음 붙었을 때: A·B는 연결, C는 이미 끊긴 채로 옴, D는 서버가 본 적 없음
-  apply(st, { kind: "state", robot: "A", marker: 15, online: true }, T);
-  apply(st, { kind: "state", robot: "B", marker: 15, online: true }, T);
+  apply(st, { kind: "state", robot: "A", marker: DOCK_MARKER, online: true }, T);
+  apply(st, { kind: "state", robot: "B", marker: DOCK_MARKER, online: true }, T);
   apply(st, { kind: "state", robot: "C", marker: 7, online: false }, T);
   let sum = connectionSummary(st, T);
   assert.equal(sum.total, 4);
@@ -249,7 +249,7 @@ assert.ok(!fake._snapshot().some((m) => m.kind === "evac"), "평상시로 돌아
 
 // ---------- 로봇 위치: 카드 글자와 지도 ----------
 assert.equal(robotPlace({ marker: 8, status: "patrol", role: "A" }), "A 경로 · 마커 8");
-assert.equal(robotPlace({ marker: 15, status: "idle", role: null }), "충전 스테이션");
+assert.equal(robotPlace({ marker: DOCK_MARKER, status: "idle", role: null }), "충전 스테이션");
 assert.equal(robotPlace({ marker: 14, status: "dock" }), "마커 14");
 assert.equal(robotPlace(undefined), "-");
 // 화면 이름: A~D → MD-1~MD-4, 모르는 이름은 그대로
@@ -258,14 +258,14 @@ assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(N
 {
   const svg = robotLayer([
     { name: "A", marker: 8, online: true },
-    { name: "B", marker: 15, online: true },
-    { name: "D", marker: 15, online: false },
+    { name: "B", marker: DOCK_MARKER, online: true },
+    { name: "D", marker: DOCK_MARKER, online: false },
     { name: "X", marker: 99, online: true }, // 없는 마커는 안 그림
   ]);
   assert.equal((svg.match(/class="robot"/g) || []).length, 3);
   assert.ok(svg.includes(">A</text>") && svg.includes(">D</text>") && !svg.includes(">X</text>"));
   assert.ok(svg.includes("stroke-dasharray"), "끊긴 로봇은 점선");
-  // 같은 마커(15)에 두 대면 x가 다르다
+  // 같은 마커(충전 스테이션)에 두 대면 x가 다르다
   const xs = [...svg.matchAll(/<rect x="([\d.-]+)" y="[\d.-]+" width="120"/g)].map((m) => Number(m[1]));
   assert.equal(new Set(xs).size, 3);
 }
@@ -274,51 +274,64 @@ assert.deepEqual(Object.keys(MARKER_POS).map(Number), Object.keys(MARKERS).map(N
 {
   // 통로 구간: 직선, 꺾이는 곳(줄기), 이어지지 않는 마커
   assert.deepEqual(corridorPoints(5, 6), [MARKER_POS[5], MARKER_POS[6]]);
-  assert.deepEqual(corridorPoints(9, 6), [MARKER_POS[9], [MARKER_POS[9][0], MARKER_POS[6][1]], MARKER_POS[6]]);
-  assert.equal(corridorPoints(14, 11).length, 3);
-  assert.equal(corridorPoints(1, 13), null);
+  assert.deepEqual(corridorPoints(1, 5), [MARKER_POS[1], MARKER_POS[5]], "세로 직선");
+  assert.equal(corridorPoints(1, 3), null, "가운데 2번을 지나면 이웃 아님");
   assert.equal(corridorPoints(1, 99), null);
+  assert.equal(corridorPoints(1, 1), null);
+  // 순찰 경로의 이웃한 마커는 모두 지도 통로로 이어진다 (지도 그림과 순찰 경로가 맞는지)
+  for (const [role, r] of Object.entries(ROUTES)) {
+    const seqs = [[...r.entry, r.loop[0]], [...r.loop, r.loop[0]], [RETURN_POINT[role], ...r.back]];
+    for (const seq of seqs) {
+      for (let i = 0; i + 1 < seq.length; i++) {
+        if (seq[i] !== seq[i + 1]) assert.ok(corridorPoints(seq[i], seq[i + 1]), `${role} 경로 ${seq[i]}–${seq[i + 1]}가 지도 통로로 안 이어짐`);
+      }
+    }
+  }
 
   // 가짜 서버 대피 경로 (server/dispatch.py plan과 같은 값. python에 dispatch.plan이 있으면 직접 비교)
   const plan7 = evacPlan(7);
-  assert.equal(plan7.length, 15);
+  const N = Object.keys(MARKERS).length;
+  assert.equal(plan7.length, N);
   assert.deepEqual(plan7.find((a) => a.marker === 7), { marker: 7, dir: "x", exit: null, path: [] }, "불난 마커는 x");
   assert.ok(plan7.every((a) => !a.path.includes(7)), "불난 마커를 지나지 않음");
-  assert.deepEqual(plan7.find((a) => a.marker === 15), { marker: 15, dir: "N", exit: 5, path: [15, 14, 11, 10, 5] });
-  assert.deepEqual(plan7.find((a) => a.marker === 3), { marker: 3, dir: "E", exit: 8, path: [3, 4, 8] });
-  assert.equal(plan7.find((a) => a.marker === 5).dir, "here");
-  assert.ok(evacPlan(5).every((a) => a.dir === "x" || a.exit === 8), "5번 출구가 불나면 모두 8번으로");
-  assert.ok(evacPlan(null, [15]).every((a) => a.dir === "here" ? a.marker === 15 : a.exit === 15), "출구를 바꿔 넣을 수 있음");
+  for (const a of plan7) {
+    if (a.dir === "x" || a.dir === "here") continue;
+    assert.ok(a.path[0] === a.marker && a.path.at(-1) === a.exit && EXITS.includes(a.exit), `${a.marker}번 길이 출구로 안 감`);
+  }
+  for (const e of EXITS) assert.equal(plan7.find((a) => a.marker === e).dir, "here");
+  const [e1, e2] = EXITS;
+  assert.ok(evacPlan(e1).every((a) => a.dir === "x" || a.exit === e2), `${e1}번 출구가 불나면 모두 ${e2}번으로`);
+  assert.ok(evacPlan(null, [DOCK_MARKER]).every((a) => a.dir === "here" ? a.marker === DOCK_MARKER : a.exit === DOCK_MARKER), "출구를 바꿔 넣을 수 있음");
   for (const f of [null, 7]) {
     for (const a of evacPlan(f)) {
       for (let i = 0; i + 1 < a.path.length; i++) assert.ok(corridorPoints(a.path[i], a.path[i + 1]), `${a.path} 지도 통로로 안 이어짐`);
     }
   }
   try {
-    const code = `import json; from server import dispatch; print(json.dumps([dispatch.plan(fire=f, exits=${JSON.stringify(EXITS)}) for f in [None, *range(1, 16)]]))`;
+    const code = `import json; from server import dispatch; print(json.dumps([dispatch.plan(fire=f, exits=${JSON.stringify(EXITS)}) for f in [None, *range(1, ${N + 1})]]))`;
     const py = JSON.parse(execFileSync("python", ["-c", code], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
-    [null, ...Array.from({ length: 15 }, (_, i) => i + 1)].forEach((f, i) => assert.deepEqual(evacPlan(f), py[i], `fire ${f}: dispatch.plan과 다름`));
+    [null, ...Array.from({ length: N }, (_, i) => i + 1)].forEach((f, i) => assert.deepEqual(evacPlan(f), py[i], `fire ${f}: dispatch.plan과 다름`));
   } catch (e) {
     if (e instanceof assert.AssertionError) throw e; // dispatch.plan이 없는 서버(PR #23 전)면 건너뜀
   }
 
   // 화재 층: 마커 둘레, 모르는 마커는 안 그림
-  assert.match(fireLayer(7), /class="fire-marker" cx="1220" cy="553"/);
+  assert.ok(fireLayer(7).includes(`class="fire-marker" cx="${MARKER_POS[7][0]}" cy="${MARKER_POS[7][1]}"`));
   assert.match(fireLayer(7), /화재/);
   assert.equal(fireLayer(null), "");
   assert.equal(fireLayer(99), "");
 
   // 대피 층: 화살표는 N·E·S·W만, 같은 통로는 한 번, 출구 표시, 불 아닌 x는 갈 수 없음 표시
   let svg = guideLayer({ fire: 7, exits: EXITS, arrows: plan7 });
-  assert.equal((svg.match(/class="guide-arrow"/g) || []).length, 12, "15개 중 불난 7(x)과 출구 5·8(here) 빼고");
+  assert.equal((svg.match(/class="guide-arrow"/g) || []).length, N - 1 - EXITS.length, "불난 7(x)과 출구(here) 빼고 마커마다");
   const edges = new Set(plan7.flatMap((a) => a.path.slice(1).map((m, i) => [a.path[i], m].sort((x, y) => x - y).join("-"))));
   assert.equal((svg.match(/class="guide-path"/g) || []).length, edges.size + 2, "같은 통로는 한 번만, 출구 두 곳은 문까지 한 줄씩 더");
   assert.equal((svg.match(/class="guide-exit"/g) || []).length, 2);
   assert.ok(svg.includes("340,553 258,553") && svg.includes("1650,553 1738,553"), "출구에서 비상구 문까지");
   assert.equal(svg.match(/guide-blocked/), null, "불난 마커는 화재 층이 그림");
-  svg = guideLayer({ fire: null, exits: [5, 8], arrows: [{ marker: 6, dir: "W", exit: 5, path: [6, 5] }, { marker: 3, dir: "x", exit: null, path: [] }] });
-  assert.ok(svg.includes("340,553 258,553"), "5번 출구는 비상구 1 문까지");
-  assert.ok(svg.includes("1650,553 1738,553"), "8번 출구는 비상구 2 문까지");
+  svg = guideLayer({ fire: null, exits: EXITS, arrows: [{ marker: 6, dir: "W", exit: 5, path: [6, 5] }, { marker: 3, dir: "x", exit: null, path: [] }] });
+  assert.ok(svg.includes("340,553 258,553"), "비상구 1 옆 출구는 문까지");
+  assert.ok(svg.includes("1650,553 1738,553"), "비상구 2 옆 출구는 문까지");
   assert.equal((svg.match(/guide-blocked/g) || []).length, 1, "갈 수 없는 마커");
   svg = guideLayer({ exits: [], arrows: [{ marker: 99, dir: "N" }, { marker: 3, dir: "Q" }, { marker: 2, dir: "here", path: [2, 13] }] });
   assert.equal(svg, "", "없는 마커·모르는 방향·이어지지 않는 길은 안 그림");
@@ -417,8 +430,8 @@ async function bootApp(search, tag, { login } = {}) {
   assert.equal((el("map .guides").innerHTML.match(/class="guide-exit"/g) || []).length, 2);
   const placed = globalThis.fake.fire("B", 7);
   await new Promise((r) => setTimeout(r, 0));
-  assert.match(el("map .fire").innerHTML, /cx="1220" cy="553"/);
-  assert.equal((el("map .guides").innerHTML.match(/class="guide-arrow"/g) || []).length, 12);
+  assert.ok(el("map .fire").innerHTML.includes(`cx="${MARKER_POS[7][0]}" cy="${MARKER_POS[7][1]}"`));
+  assert.equal((el("map .guides").innerHTML.match(/class="guide-arrow"/g) || []).length, Object.keys(MARKERS).length - 1 - EXITS.length);
   await globalThis.fake.fetch(`/events/${placed.id}/check`, { method: "POST" });
   await globalThis.fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
   await new Promise((r) => setTimeout(r, 0));
@@ -428,13 +441,14 @@ async function bootApp(search, tag, { login } = {}) {
   await globalThis.fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "evacuate" }) });
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(el("map .fire").innerHTML, "");
-  assert.equal((el("map .guides").innerHTML.match(/class="guide-arrow"/g) || []).length, 13);
+  assert.equal((el("map .guides").innerHTML.match(/class="guide-arrow"/g) || []).length, Object.keys(MARKERS).length - EXITS.length);
   await globalThis.fake.fetch("/mode", { method: "POST", body: JSON.stringify({ mode: "normal" }) });
   globalThis.fake.fire("A"); // 아래 지도 확인은 대피 중 그대로
-  // 지도: 마커 15개, 구역 5개, 경보·로봇 표시는 없음
+  // 지도: 마커 전부, 구역 5개, 경보·로봇 표시는 없음
   const svg = el("map").innerHTML;
   assert.equal(el("map").viewBox, "40 40 1920 1330");
-  for (let n = 1; n <= 15; n++) assert.ok(svg.includes(`>${n}</text>`), `지도에 마커 ${n} 없음`);
+  for (const n of Object.keys(MARKERS)) assert.ok(svg.includes(`>${n}</text>`), `지도에 마커 ${n} 없음`);
+  assert.deepEqual(Object.keys(MARKER_POS), Object.keys(MARKERS), "지도 그림(map.js)과 지도 데이터(mapdata.js)의 마커가 같음");
   for (const z of ["A1", "A2", "A3", "B1", "B2"]) assert.ok(svg.includes(`>${z}</text>`), `지도에 구역 ${z} 없음`);
   assert.ok(svg.includes("비상구 1") && svg.includes("비상구 2") && svg.includes("충전 스테이션"));
   assert.ok(!/화재|통로 차단|밟힘/.test(svg));
@@ -975,9 +989,9 @@ class FakeAudioContext {
 
 // ---------- 길 중간에 멈춘 로봇 (이슈 #22) ----------
 {
-  assert.equal(robotStop({ status: "idle", marker: 15 }), null, "충전 스테이션에서 쉬는 건 멈춤 아님");
-  assert.equal(robotStop({ status: "idle", marker: 15, hold: null }), null);
-  assert.deepEqual(robotStop({ status: "idle", marker: 15, hold: "stop" }), { hold: "stop", reason: "관리자 정지" },
+  assert.equal(robotStop({ status: "idle", marker: DOCK_MARKER }), null, "충전 스테이션에서 쉬는 건 멈춤 아님");
+  assert.equal(robotStop({ status: "idle", marker: DOCK_MARKER, hold: null }), null);
+  assert.deepEqual(robotStop({ status: "idle", marker: DOCK_MARKER, hold: "stop" }), { hold: "stop", reason: "관리자 정지" },
     "충전 스테이션이어도 hold가 있으면 멈춤 (서버가 자동 출발시키지 않음)");
   assert.equal(robotStop({ status: "guide", marker: 7, hold: "guide" }), null, "대피 안내는 따로 있음");
   assert.equal(robotStop({ status: "patrol", marker: 7 }), null);
@@ -986,6 +1000,11 @@ class FakeAudioContext {
   assert.equal(robotStop(undefined), null);
   assert.deepEqual(robotStop({ status: "idle", marker: 7 }), { hold: null, reason: null });
   assert.deepEqual(robotStop({ status: "idle", marker: 7, hold: "line" }), { hold: "line", reason: "안전 정지: 선을 놓침" });
+  // 서버 대기(wait: 교통 정리 · 교차 확인)는 멈춤이 아님. 서버가 다시 출발시킨다
+  assert.equal(robotStop({ status: "idle", marker: 7, hold: "wait" }), null);
+  assert.equal(robotWaiting({ status: "idle", marker: 7, hold: "wait" }), true);
+  assert.equal(robotWaiting({ status: "idle", marker: 7, hold: "stop" }), false);
+  assert.equal(robotWaiting({ status: "patrol", marker: 7, hold: null }), false);
   // edge/agent.py가 쓰는 hold 값은 모두 문구가 있음
   const { HOLD_TEXT } = await import("./js/store.js");
   const agent = (await import("node:fs")).readFileSync(new URL("../edge/agent.py", import.meta.url), "utf8");
@@ -1050,13 +1069,14 @@ class FakeAudioContext {
   assert.equal(fake.robots.A.hold, null);
   assert.equal(fake.robots.A.status, "patrol");
   assert.ok(!/멈춤|data-resume/.test(card()));
-  // 교차 확인 대기(wait)는 서버가 진행 중이라 버튼 없음
+  // 서버 대기(wait: 교통 정리 · 교차 확인)는 멈춤이 아니라 버튼 없음, 주황 테두리 없음
   fake.robots.B.marker = 7;
   fake.halt("B", "wait");
   await tickWait();
   const cardB = el("robot-list").innerHTML.split("<li").find((x) => x.includes(">MD-2<"));
-  assert.match(cardB, /교차 확인 대기/);
-  assert.ok(!cardB.includes("data-resume"));
+  assert.match(cardB, /class="state">서버 대기</);
+  assert.match(cardB, /길이 비면 서버가 다시 출발시킴/);
+  assert.ok(!cardB.includes("data-resume") && !cardB.includes("stopped") && !cardB.includes("멈춤"));
   // 못 보내면 카드에 알림 (가짜 서버가 모르는 로봇 → 404)
   fake.robots.C.marker = 9;
   fake.halt("C", "stop");
