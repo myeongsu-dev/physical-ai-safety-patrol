@@ -30,6 +30,7 @@ from common import protocol
 from edge import config
 from edge.detect import SAFETY, Detector, Voter, fire, has_person, no_helmet
 from edge.dog_link import BoardState
+from edge.health import Health
 from edge.thermo import is_suspect
 
 log = logging.getLogger("edge.agent")
@@ -99,6 +100,7 @@ class Agent:
         self.last_t_cmd = -1e9
         self.next_thermo = 0.0
         self.next_state = 0.0
+        self.health = Health(self)
 
     # ---------- 시작 · 끝 ----------
     def start(self):
@@ -169,7 +171,8 @@ class Agent:
         status = self.status if self.status not in MOVING or self.acked else "idle"
         return {"marker": self.marker, "status": status, "role": self.role, "battery": self.battery,
                 "sonar_cm": self.board.sonar_cm, "temp_c": self.temp_c, "version": self.version,
-                "hold": self.hold}   # 다시 걷지 않는 이유 (없으면 None → null). 서버는 이것이 None일 때만 자동 출발
+                "hold": self.hold,   # 다시 걷지 않는 이유 (없으면 None → null). 서버는 이것이 None일 때만 자동 출발
+                "health": self.health.snapshot()}   # Pi · 보드 · 카메라 · 센서 상태 (#54, edge/health.py)
 
     # ---------- 움직임 ----------
     def _move(self, force=False):

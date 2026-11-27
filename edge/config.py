@@ -82,6 +82,11 @@ HELMET_CONF = _get("HELMET_CONF", 0.5, float)
 FLAME_CONF = _get("FLAME_CONF", 0.4, float)
 EVENT_COOLDOWN_S = _get("EVENT_COOLDOWN_S", 30.0, float)  # 같은 종류 이벤트 반복 막기
 
+# ---------- 로봇 상태 health (edge/health.py, state에 매초) ----------
+BOARD_OK_S = _get("BOARD_OK_S", 1.0, float)            # 보드 측정값(D)이 이 안에 왔으면 board.ok
+CAM_OK_S = _get("CAM_OK_S", 2.0, float)                # 머리 카메라 장이 이 안에 왔으면 cam.ok
+FLOOR_WEB_PORT = _get("FLOOR_WEB_PORT", 8090, _int)    # 바닥 비전 모듈 화면(firmware/vision/view.py). 켜져 있을 때만 floor_web 링크
+
 # ---------- 디버그 웹 화면 (edge/webview.py) ----------
 WEB_PORT = _get("WEB_PORT", 8080, _int)                  # 0이면 안 띄움. 브라우저에서 http://<Pi IP>:8080
 WEB_FPS = _get("WEB_FPS", 10, _int)                      # 웹으로 보내는 영상 최대 장/초 (Pi CPU 아끼기)
