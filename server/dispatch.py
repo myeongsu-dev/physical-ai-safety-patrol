@@ -100,12 +100,16 @@ def robot_arrow(direction, heading):
 
 
 def guide_commands(fleet, arrows):
-    """대피 시작 때 연결된 로봇마다 보낼 guide 명령 [(로봇, 명령 dict)]. 마커나 방향을 모르는 로봇은 뺀다."""
+    """대피 시작 때 연결된 로봇마다 보낼 guide 명령 [(로봇, 명령 dict)]. 마커나 방향을 모르는 로봇은 뺀다.
+    도크에서 쉬는 로봇도 뺀다 (현장에 없고, 대피가 끝나 resume을 받으면 쉬던 로봇이 걸어 나가므로)."""
     by_marker = {a["marker"]: a for a in arrows}
     out = []
     for robot in sorted(fleet.robots):
-        a = by_marker.get(fleet.robots[robot].get("marker"))
+        s = fleet.robots[robot]
+        a = by_marker.get(s.get("marker"))
         if not fleet.online(robot) or a is None:
+            continue
+        if s.get("status") in ("idle", "dock") and fleet.at_dock(robot):
             continue
         arrow = robot_arrow(a["dir"], fleet.heading.get(robot))
         if arrow:
@@ -155,4 +159,8 @@ if __name__ == "__main__":
     assert cmds == [("A", {"cmd": "guide", "arrow": "x"})], cmds          # 5에서 15로는 남쪽(뒤)
     p = {a["marker"]: a for a in plan(exits=[1])}
     assert p[5]["dir"] == "N" and guide_commands(f, plan(exits=[1])) == [("A", {"cmd": "guide", "arrow": "up"})]
+    # 도크에서 쉬는 로봇에는 guide 안 보냄
+    f.update_state("C", {"marker": 14, "status": "patrol", "battery": 80})
+    f.update_state("C", {"marker": 15, "status": "idle", "battery": 80})    # 14 → 15: 도크에 들어와 쉼
+    assert "C" not in {r for r, _ in guide_commands(f, plan())}
     print("dispatch ok: 불 없음 →", {a["marker"]: a["dir"] for a in plan()})
