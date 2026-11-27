@@ -218,15 +218,15 @@ def selfcheck():
         assert b.tick(chance=0) == []
         seen.append(b.marker)
     route = map_config.ROUTES["A"]
-    assert seen[MARKER_SEC] == route["entry"][1], seen[:10]      # 도크 → 14 → 고리
-    assert set(route["loop"]) <= set(seen) and 9 not in seen      # A 고리만 돈다
+    assert seen[MARKER_SEC] == route["entry"][1], seen[:10]      # 도크 → 15 → 고리
+    assert set(route["loop"]) <= set(seen) and not {6, 7, 8} & set(seen)   # A 고리만 돈다 (안쪽 6·7·8은 B만)
     assert b.state()["role"] == "A" and b.battery < 50
     b.on_cmd({"cmd": "stop"}); assert b.status == "idle" and b.state()["hold"] == "stop"
     b.on_cmd({"cmd": "resume"}); assert b.status == "patrol" and b.state()["hold"] is None
     b.on_cmd(protocol.command("dock"))
     for _ in range(10):
         now[0] += 1; b.tick(chance=0)
-    assert b.status == "dock" and b.marker == 15 and b.battery == 100
+    assert b.status == "dock" and b.marker == map_config.DOCK_MARKER and b.battery == 100
     b.on_mode({"mode": "evacuate"}); b.on_cmd(protocol.command("guide", arrow="left"))
     assert b.status == "guide"
     b.on_mode({"mode": "normal"}); assert b.status == "idle"
