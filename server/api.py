@@ -53,6 +53,7 @@ from common import protocol
 from server import dispatch, map_config
 from server.events import EventLog, HeatCheck
 from server.fleet import ONLINE_SEC, Fleet
+from server.traffic import Traffic
 
 log = logging.getLogger("server")
 
@@ -103,7 +104,8 @@ class Server:
         self.linked = {}    # 로봇 → 지난번에 본 연결 상태 (끊김·다시 붙음을 화면에 알리려고)
         self.events = EventLog(str(db_path))
         self.heat = HeatCheck(self.fleet)
-        self.lock = threading.Lock()   # MQTT 스레드와 1초 tick이 heat를 같이 건드림
+        self.traffic = Traffic(self.fleet)   # 교통 정리 (같은 마커 · 도크 길에서 부딪히지 않게)
+        self.lock = threading.RLock()  # MQTT 스레드 · 1초 tick · HTTP가 heat · traffic을 같이 건드림
         self.hub = Hub()
         self.mode = "normal"
         self.photo_dir = Path(photo_dir)
@@ -133,11 +135,20 @@ class Server:
             self.client.loop_stop()
             self.client.disconnect()
 
-    def publish(self, topic, msg, qos=1):
+    def publish(self, topic, msg, qos=1, own=False):
+        """own: 교통 정리가 보낸 명령. 다른 곳(과열 확인, 관리자, 출발)이 보낸 명령은 교통 정리에 알려 다시 판단하게 한다"""
         if self.client:
             self.client.publish(topic, protocol.pack(msg), qos=qos)
         else:
             self.sent.append((topic, msg))
+        t = protocol.parse_topic(topic)
+        if t and t[1] == "cmd":
+            with self.lock:
+                self.send_traffic(self.traffic.note_command(t[0], msg, own=own))
+
+    def send_traffic(self, cmds):
+        for robot, cmd in cmds:
+            self.publish(protocol.topic(robot, "cmd"), cmd, own=True)
 
     def on_mqtt(self, topic, payload):
         t = protocol.parse_topic(topic)
@@ -150,7 +161,9 @@ class Server:
             log.warning("깨진 메시지 버림 %s: %s", topic, e)
             return
         if kind == "state":
-            self.fleet.update_state(robot, msg)
+            with self.lock:
+                self.fleet.update_state(robot, msg)
+                self.send_traffic(self.traffic.on_state(robot, active=self.mode == "normal"))
             if self.linked.get(robot) is False:
                 log.info("%s 다시 연결됨", robot)
             self.linked[robot] = True
@@ -176,10 +189,15 @@ class Server:
                 self.hub.push(self.state_msg(robot))
         with self.lock:
             self.apply(self.heat.tick())
-            if self.auto_start and self.mode == "normal":
-                sent = self.send_all(self.fleet.auto_assign(auto=True, exclude=self.heat.busy()))
-                for s in sent:
-                    log.info("자동 출발 %s 역할 %s", s["topic"].split("/")[1], s["msg"]["role"])
+            if self.mode == "normal":
+                self.send_traffic(self.traffic.tick(exclude=self.heat.busy()))
+            if self.auto_start and self.mode == "normal" and self.traffic.can_depart():
+                # 도크 길은 한 대씩: 길이 비었을 때 한 대만 내보내고, 그 로봇이 고리로 나가면 다음 로봇
+                for topic, msg in self.fleet.auto_assign(auto=True, exclude=self.heat.busy(), limit=1):
+                    robot = topic.split("/")[1]
+                    self.publish(topic, msg, own=True)
+                    log.info("자동 출발 %s 역할 %s", robot, msg["role"])
+                    self.send_traffic(self.traffic.departed(robot))
 
     def apply(self, actions):
         """HeatCheck가 돌려준 할 일 실행"""
@@ -213,6 +231,9 @@ class Server:
             raise ValueError("모르는 모드: " + str(mode))
         was = self.mode
         self.mode = mode
+        if mode != was:
+            with self.lock:
+                self.traffic.reset()
         if mode == "normal":
             self.heat.reset()
             self.evac = None
@@ -480,8 +501,13 @@ def selfcheck():
             srv.on_mqtt("potent/C/state", protocol.pack({"marker": 16, "status": "idle", "battery": 99, "hold": "stop"}))
             srv.sent.clear()
             srv.tick()
-            assert srv.sent == [("potent/B/cmd", {"cmd": "patrol", "role": "A"}),
-                                ("potent/A/cmd", {"cmd": "patrol", "role": "B"})], srv.sent
+            assert srv.sent == [("potent/B/cmd", {"cmd": "patrol", "role": "A"})], srv.sent   # 도크 길은 한 대씩
+            srv.tick()
+            assert len(srv.sent) == 1                       # B가 도크 길을 빠져나가기 전엔 다음 로봇 안 보냄
+            for m in (15, 12, 11):                          # B가 12를 지나 A 고리로 나감 → 도크 길이 빔
+                srv.on_mqtt("potent/B/state", protocol.pack({"marker": m, "status": "patrol", "battery": 90, "hold": None}))
+            srv.tick()
+            assert srv.sent[-1] == ("potent/A/cmd", {"cmd": "patrol", "role": "B"}), srv.sent
             srv.tick()
             assert len(srv.sent) == 2                       # 보드 응답 기다리는 동안 또 안 보냄
             srv.sent.clear()
@@ -497,6 +523,17 @@ def selfcheck():
             srv.sent.clear()
             srv.tick()
             assert srv.sent[0] == ("potent/C/cmd", {"cmd": "patrol", "role": "A"}), srv.sent
+        # 교통 정리: 같은 마커(12)를 두 대가 원하면 늦은 쪽 wait, 앞 로봇이 지나가면 resume
+        now[0] += 100
+        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0], auto_start=False)
+        srv.fleet.roles.update({"A": "A", "B": "B"})
+        for robot, m in (("A", 14), ("A", 13), ("B", 16), ("B", 15)):
+            srv.on_mqtt(f"potent/{robot}/state", protocol.pack({"marker": m, "status": "patrol", "battery": 80, "hold": None, "role": robot}))
+        assert srv.sent == [("potent/B/cmd", {"cmd": "wait"})], srv.sent
+        for m in (12, 11):
+            srv.on_mqtt("potent/A/state", protocol.pack({"marker": m, "status": "patrol", "battery": 80, "hold": None, "role": "A"}))
+        srv.tick()
+        assert srv.sent[-1] == ("potent/B/cmd", {"cmd": "resume"}), srv.sent
         # 관리자 잠금: 비밀번호를 정하면 경보 닫기·출발·명령·모드는 맞는 헤더가 있어야 함
         srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, admin_password="pw1234", auto_start=False)
         with TestClient(create_app(srv)) as c:

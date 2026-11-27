@@ -10,6 +10,7 @@ python -m compileall -q server
 python -m server.map_config
 python -m server.fleet
 python -m server.events
+python -m server.traffic
 python -m server.dispatch
 python -m server.fake_robots --selfcheck
 python -m server.api --selfcheck

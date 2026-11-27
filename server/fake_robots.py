@@ -86,7 +86,8 @@ class FakeRobot:
             if self.target not in map_config.MARKERS:
                 log.warning("%s: 모르는 구역 %s", self.name, self.target)
                 return
-            self.path = [self.target]       # 지도 경로 계산은 dispatch에서. 여기선 바로 그 마커로
+            from server.traffic import shortest_path
+            self.path = shortest_path(self.marker, self.target)[1:] if self.marker in map_config.MARKERS                 else [self.target]          # 지도 길을 따라 (서버 교통 정리가 마커마다 세울 수 있게)
             self.status = cmd
         elif cmd == "wait":
             self.status, self.hold = "idle", "wait"
@@ -224,7 +225,7 @@ def selfcheck():
     b.on_cmd({"cmd": "stop"}); assert b.status == "idle" and b.state()["hold"] == "stop"
     b.on_cmd({"cmd": "resume"}); assert b.status == "patrol" and b.state()["hold"] is None
     b.on_cmd(protocol.command("dock"))
-    for _ in range(10):
+    for _ in range(80):                                            # 지도 길을 따라 도크까지
         now[0] += 1; b.tick(chance=0)
     assert b.status == "dock" and b.marker == map_config.DOCK_MARKER and b.battery == 100
     b.on_mode({"mode": "evacuate"}); b.on_cmd(protocol.command("guide", arrow="left"))
