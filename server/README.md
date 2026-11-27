@@ -7,6 +7,7 @@
 | `fleet.py` | 로봇 상태(대기·순찰·막힘 정지·과열 확인·출동·대피 안내·복귀) · 마커로 구역 위치 계산 |
 | `events.py` | 이벤트 판단 · 과열 교차 확인 (두 대 모두 50℃ 초과 + 불꽃 → 화재 확정) |
 | `dispatch.py` | 대피 안내: 불난 마커를 피해 마커마다 출구 방향(화살표) 계산. 충전 교대 · 출동 · 합류점 우선권은 아직 |
+| `traffic.py` | 교통 정리 · 다음 마커 예약(먼저 찍은 로봇 우선, 같은 마커면 wait), 도크 길 한 대씩, 복귀 지점에서 서버가 dock |
 | `fake_robots.py` | 가짜 로봇. MQTT로 상태·이벤트를 흉내 내 로봇 없이 서버·대시보드 개발 |
 | `api.py` | FastAPI: WebSocket `/ws`, 사진 `POST·GET /photos`, 경보 닫기(정탐·오탐), 지난 경보 `GET /events`, 관리자 잠금 (실행 진입점) |
 
@@ -23,3 +24,22 @@ pip install -r server/requirements.txt
 python -m server.fake_robots     # 로봇 대신
 python -m server.api             # http://localhost:8000
 ```
+
+## 교통 정리 (우선순위)
+
+A·B가 같은 마커나 도크 길에서 부딪히지 않게 서버가 `wait`으로 세우고 풀어 줍니다. 값은 모두 `map_config.py`에 있습니다.
+
+1. 다음 마커 예약: 로봇이 마커를 찍으면 동선상 다음 마커를 예약합니다. 다른 로봇이 있거나 예약했으면 그 자리에서 `wait`, 비면 풀어 줍니다 (순찰은 `resume`, 복귀 · 출동은 `dock` · `go`를 다시 보냄)
+2. 도크 길(`SINGLE_LANES`, 12-15-16)은 한 번에 한 대만. 출발은 길이 비었을 때 한 대씩, 복귀는 복귀 지점에서 길이 비었을 때만 서버가 `dock` (안 비었으면 한 바퀴 더)
+3. 거의 같이(`TIE_WINDOW_S` 0.5초 안) 원하면 `TIE_BREAK`: `PRIORITY`(복귀 > 출동 > 순찰) → 배터리 낮은 쪽 → 이름 순
+
+| 바꾸고 싶은 것 | 값 |
+|---|---|
+| 우선순위 순서 | `PRIORITY` |
+| 동시로 보는 시간 | `TIE_WINDOW_S` |
+| 동점일 때 순서 | `TIE_BREAK` |
+| 한 대만 다니는 길 | `SINGLE_LANES` |
+| 복귀를 서버가 정할지 | `SERVER_DOCK` |
+
+대피 중에는 쓰지 않습니다 (guide가 로봇을 세움).
+

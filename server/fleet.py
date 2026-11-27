@@ -54,7 +54,8 @@ class Fleet:
             return False
         status = self.robots[robot].get("status")
         waiting = status == "idle" and self.clock() - self.started.get(robot, -1e9) < START_GRACE_S
-        return status in ON_DUTY or waiting   # Pi는 보드가 F에 답하기 전까지 idle로 보낸다
+        held = status == "idle" and self.robots[robot].get("hold") == "wait"   # 서버가 잠깐 세운 것 (교통 정리 · 교차 확인)
+        return status in ON_DUTY or waiting or held   # Pi는 보드가 F에 답하기 전까지 idle로 보낸다
 
     def at_dock(self, robot):
         """도크에 있다고 볼 수 있나. 켜고 아직 마커를 못 읽었으면(None, 한 번도 본 적 없음) 도크로 본다
@@ -85,12 +86,12 @@ class Fleet:
         self.started[robot] = self.clock()
         return [(protocol.topic(robot, "cmd"), protocol.command("patrol", role=role))]
 
-    def auto_assign(self, auto=False, exclude=()):
+    def auto_assign(self, auto=False, exclude=(), limit=None):
         """비어 있는 역할을 쉬는 로봇에게 나눠 주고 출발시킨다. 배터리가 많은 로봇부터 A, B 순서로.
         둘 다 hold(정지 이유)가 없는 로봇만. hold는 patrol · resume을 직접 보내야 풀린다 (POST /robots/…)
         auto=False (POST /fleet/start): 연결된 로봇 중 배터리가 BATTERY_RETURN 초과면 내보냄
         auto=True (서버가 1초마다): 도크에서 쉬고(idle · dock) 배터리 BATTERY_START 이상인 로봇만
-        exclude: 내보내면 안 되는 로봇 (과열 확인 중)"""
+        exclude: 내보내면 안 되는 로봇 (과열 확인 중), limit: 한 번에 내보낼 최대 대수 (도크 길은 한 대씩이라 1)"""
         busy = {name for name in self.roles.values() if self.on_duty(name)}
         free_roles = [r for r in protocol.ROLES if self.roles.get(r) not in busy]
         if not free_roles:
@@ -108,7 +109,7 @@ class Fleet:
             return s.get("battery", 0) > map_config.BATTERY_RETURN
         ready = sorted(filter(ready, self.robots), key=lambda n: (-self.robots[n].get("battery", 0), n))
         out = []
-        for role, robot in zip(free_roles, ready):
+        for role, robot in list(zip(free_roles, ready))[:limit]:
             out += self.assign(robot, role)
         return out
 

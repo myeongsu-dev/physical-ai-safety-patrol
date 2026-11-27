@@ -59,10 +59,16 @@ BATTERY_START = 60         # 도크에서 이 값 이상이면 서버가 자동 
 BATTERY_EMERGENCY = 15     # 어디서든 이 값 이하면 그 자리 정지 + 서버에 보고
 
 
-# ---------- 만났을 때 우선순위: 보류 ----------
-# TODO(보류, 팀 결정 전): A·B가 도크 길(DOCK_LANE)이나 갈림길에서 동시에 만날 때 누가 먼저 갈지.
-# 지금 제안: 배터리 낮은 쪽 먼저, 같으면 A (A는 12에서 바로 도크 길로 들어간다). 진 쪽은 한 바퀴 더 순찰.
-# 정해지면 여기에 규칙을 넣고 dispatch.py(합류점 우선권)에서 쓴다.
+# ---------- 만났을 때 우선순위 (server/traffic.py가 씀) ----------
+# 규칙 1: 다음 마커 예약. 로봇이 마커를 찍으면 동선상 다음 마커를 예약하고, 다른 로봇이 이미 있거나 예약했으면 그 자리 wait.
+# 규칙 2: SINGLE_LANES(한 줄 길)는 한 번에 한 대만. 들어오는 로봇 먼저, 다 들어온 뒤 출발.
+# 대피 중에는 쓰지 않는다 (guide가 로봇을 세움). 팀 결정이 바뀌면 아래 값만 고친다.
+PRIORITY = ("dock", "go", "patrol")   # 앞일수록 먼저. dock = 충전 복귀, go = 과열 확인 출동, patrol = 순찰
+TIE_WINDOW_S = 0.5                    # 이 시간 안에 같은 마커를 원하면 동시로 보고 TIE_BREAK 순서로 정함
+TIE_BREAK = ("priority", "battery", "name")   # priority: PRIORITY 순, battery: 배터리 낮은 로봇 먼저, name: 이름 순
+SINGLE_LANES = [(12, 15, 16)]         # 한 줄 길 (도크 길). 12는 길 입구. 이어진 두 마커가 모두 들어 있으면 그 구간
+SERVER_DOCK = True                    # True: 복귀 지점에서 배터리가 BATTERY_RETURN 이하면 서버가 dock 명령
+                                      #       (도크 길이 비었을 때만. 안 비었으면 한 바퀴 더 돌고 다음 복귀 지점에서 다시 봄)
 
 
 # ---------- 갈림길 동작 (마커, 진행 방향) → 동작 ----------
@@ -111,4 +117,6 @@ if __name__ == "__main__":
     assert turn("B", 7, "E", 10) == "straight" and turn("B", 7, "W", 20) == "left" and turn("B", 7, "W", 80) == "straight"
     assert turn("B", 1, "N") == "follow" and turn("B", 7, "N") == "left"
     assert all(e in MARKERS for e in EXITS) and DOCK_MARKER not in EXITS
+    assert set(PRIORITY) <= {"dock", "go", "patrol"} and set(TIE_BREAK) <= {"priority", "battery", "name"}
+    assert all(m in MARKERS for lane in SINGLE_LANES for m in lane) and any(DOCK_MARKER in lane for lane in SINGLE_LANES)
     print("map_config OK: 마커", len(MARKERS), "개, A 고리", len(ROUTES["A"]["loop"]), "· B 고리", len(ROUTES["B"]["loop"]))
