@@ -409,8 +409,8 @@ def c_flow(a):
             s = wait_state("patrol")
             ok &= _verdict(F in dog.sent and s and s["status"] == "patrol" and s["role"] == "A",
                            f"patrol(role A) → 보드 {F} ok, state {s}")
-            ok &= _verdict(s is not None and {"marker", "status", "role", "battery", "sonar_cm", "temp_c", "version"} <= set(s),
-                           "state 항목 marker·status·role·battery·sonar_cm·temp_c·version")
+            ok &= _verdict(s is not None and {"marker", "status", "role", "battery", "sonar_cm", "temp_c", "version", "hold"} <= set(s),
+                           "state 항목 marker·status·role·battery·sonar_cm·temp_c·version·hold")
 
             dog.sent.clear()
             send(cmd, json.dumps(protocol.command("stop")))

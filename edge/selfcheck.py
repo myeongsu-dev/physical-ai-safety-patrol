@@ -140,7 +140,7 @@ def check_agent(spool):
     run(ag, clock, 1.2)
     assert ag.status == "patrol" and ("F", config.PATROL_STRIDE, config.PATROL_ANGLE, config.MOVE_MS) in dog.sent
     assert states[-1]["battery"] == 50 and states[-1]["sonar_cm"] == 50.0 and states[-1]["version"] == "test"
-    assert set(states[-1]) == {"marker", "status", "role", "battery", "sonar_cm", "temp_c", "version"}
+    assert set(states[-1]) == {"marker", "status", "role", "battery", "sonar_cm", "temp_c", "version", "hold"}
 
     # 마커
     dog.inject("E", 1, "color", 3)
@@ -263,6 +263,8 @@ def check_patrol(spool):
     ag, dog, th, clock, events, states = make(spool)
     run(ag, clock, 0.5)
     status = lambda: ag.state()["status"]  # noqa: E731  서버에 보낼 상태 (states[-1]은 1초마다 실제로 보낸 것)
+    hold = lambda: ag.state()["hold"]  # noqa: E731  서버가 자동 출발을 판단하는 정지 이유
+    assert "hold" in ag.state() and hold() is None and states[-1]["hold"] is None
 
     # patrol(role A) → F → 보드 ok → state patrol, role A (ROBOT_ID B와 별개)
     dog.sent.clear()
@@ -286,6 +288,7 @@ def check_patrol(spool):
     ag.reporter.inbox.put(("cmd", {"cmd": "stop"}))
     run(ag, clock, 1.1)
     assert dog.sent[0] == ("S",) and status() == "idle" and not dog.moving and ag.hold == "stop"
+    assert hold() == "stop" and states[-1]["hold"] == "stop"
     dog.inject("E", 9, "done", 1)
     dog.inject("F", "ok")
     run(ag, clock, config.MOVE_MS / 1000 * 3)
@@ -302,6 +305,7 @@ def check_patrol(spool):
     ag.reporter.inbox.put(("cmd", {"cmd": "resume"}))
     run(ag, clock, 1.1)
     assert dog.sent.count(F()) == 1 and status() == "patrol" and states[-1]["role"] == "A"
+    assert hold() is None and states[-1]["hold"] is None
 
     # 역할 없이 온 patrol은 지난 역할을 이어 감
     ag.on_command({"cmd": "patrol"})
@@ -397,6 +401,7 @@ def check_patrol(spool):
     ag.on_command({"cmd": "patrol"})
     run(ag, clock, config.ACK_TIMEOUT_S + 0.5)
     assert ag.status == "idle" and ag.hold == "no_ack" and ("S",) in dog.sent
+    assert ag.state()["hold"] == "no_ack" and states[-1]["hold"] == "no_ack"
     assert all(s["status"] == "idle" for s in states)
     dog.silent.clear()
 

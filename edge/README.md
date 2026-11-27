@@ -28,10 +28,12 @@
 | 과열 | 45℃ 초과 → 멈춤 → 2초마다 3번 다시 재며 통합 모델의 `fire` 판정 → 다시 잰 값이 45℃ 초과면 보고. 60초 동안 서버 명령을 기다리다 없으면 하던 일로 | `heat`(+ 불꽃 확정 시 `flame`) + 사진 |
 | 서버 `guide` | 정지 + `L\|arrow\|left` 같은 LED 화살표. `mode normal`이 오면 끔 | |
 | 서버 `patrol`·`resume` | 보드 연결·측정값·선이 보일 때만 `F`. 보드 `F\|ok`가 와야 state가 `patrol` (`role`도 알림) | state `status`·`role` |
-| 서버 `stop` | `S`, 서버가 `resume`·`patrol`을 보내기 전에는 `F`를 다시 보내지 않음 | state `idle` |
-| 안전 정지 | 선 유실 1초, 보드 끊김·다시 붙음, 측정값 끊김, `F` 거부·무응답 → `S`, 다시 붙어도 저절로 안 걸음 ([PATROL.md](PATROL.md)) | state `idle` |
+| 서버 `stop` | `S`, 서버가 `resume`·`patrol`을 보내기 전에는 `F`를 다시 보내지 않음 | state `idle`, `hold` `stop` |
+| 안전 정지 | 선 유실 1초, 보드 끊김·다시 붙음, 측정값 끊김, `F` 거부·무응답 → `S`, 다시 붙어도 저절로 안 걸음 ([PATROL.md](PATROL.md)) | state `idle`, `hold`에 이유 |
 
 state의 `status`: `idle`(대기) · `patrol`(순찰) · `blocked`(막힘 정지) · `heat_check`(과열 확인) · `go`(출동) · `guide`(대피 안내) · `dock`(복귀)
+
+state의 `hold`: 다시 걷지 않는 이유. 없으면 `null`, 있으면 `stop` · `wait` · `guide`(서버 명령) · `line` · `link` · `stream` · `board` · `no_ack` · `send`(안전 정지) · `not_ready`(걸을 준비 안 됨) · `exit`(프로그램 종료). 서버 `patrol`·`resume`으로만 풀리고, 서버는 `null`일 때만 자동 출발시킴
 
 ## 실행
 
