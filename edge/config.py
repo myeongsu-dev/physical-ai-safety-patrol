@@ -37,6 +37,7 @@ CAM_PORT = _get("CAM_PORT", "/dev/ttyACM1")     # XIAO: 시리얼 경로면 JPEG
 CAM_BAUD = _get("CAM_BAUD", 2000000, _int)      # USB CDC라 실제 속도와는 무관
 I2C_BUS = _get("I2C_BUS", 1, _int)              # Pi 5 GPIO 2·3 = I2C 1번
 THERMO_ADDR = _get("THERMO_ADDR", 0x5A, _int)   # GY-906(MLX90614) 기본 주소
+DOCK_MARKER = _get("DOCK_MARKER", 16, _int)     # 충전 스테이션 마커. 서버 dock에 zone이 없으면 여기까지 감 (새 맵 12-15-16)
 
 # ---------- 서버 ----------
 MQTT_HOST = _get("MQTT_HOST", "localhost")

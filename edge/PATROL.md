@@ -121,7 +121,7 @@ Mosquitto 명령 (Windows PowerShell 5.1은 JSON의 `"`를 `\"`로 적어야 함
 mosquitto_pub -h localhost -t potent/A/cmd -q 1 -m '{\"cmd\":\"patrol\",\"role\":\"A\"}'
 mosquitto_pub -h localhost -t potent/A/cmd -q 1 -m '{\"cmd\":\"stop\"}'
 mosquitto_pub -h localhost -t potent/A/cmd -q 1 -m '{\"cmd\":\"resume\"}'
-mosquitto_sub -h localhost -t 'potent/A/state' -v      # 1초마다 state
+mosquitto_sub -h localhost -t 'potent/A/state' -v      # 1초마다 state (새 마커·멈춤은 바로)
 ```
 
 Linux·macOS·Git Bash에서는 `'{"cmd":"patrol","role":"A"}'` 그대로입니다. `-r`(보관)은 쓰지 않습니다 (Pi가 버림).
