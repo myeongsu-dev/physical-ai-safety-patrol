@@ -13,7 +13,9 @@
 - 서버 stop·wait·guide 뒤, 또는 Pi가 안전 정지한 뒤에는 서버가 patrol·resume을 보내기 전까지 F를 보내지 않음 (hold)
 - 안전 정지: 보드 포트 끊김·다시 붙음, 측정값(D) 끊김, 선 유실(line=-1이 LINE_LOST_S), F에 보드 오류·무응답
 - F에 보드 ok가 오기 전에는 state에 patrol이 아니라 idle로 알림
-- 서버(MQTT)가 끊긴 것은 안전 정지 이유가 아님 (순찰 계속)
+- 서버 신호(potent/server/alive, 1초마다)가 ALIVE_TIMEOUT_S 안 오면 단독 모드: 다음 마커까지 가서 멈춤 (hold server).
+  다시 붙어도 서버 resume·patrol을 기다림. 서버 신호를 한 번도 못 받았으면(예전 서버) 이 감시는 꺼져 있음
+- 배터리가 BATTERY_STOP_PCT(15%) 이하로 BATTERY_LOW_S 동안 계속되면 그 자리에서 멈춤 (hold battery)
 """
 import argparse
 import logging
@@ -67,7 +69,7 @@ class Agent:
         self.status = "idle"
         self.mode = "normal"
         self.role = None          # 서버가 patrol로 정해 준 순찰 역할 A·B (ROBOT_ID와 별개)
-        self.hold = None          # 다시 걷지 않는 이유: stop·wait·guide·link·stream·line·board·no_ack·send (patrol·resume으로만 풀림)
+        self.hold = None          # 다시 걷지 않는 이유: stop·wait·guide·link·stream·line·board·no_ack·send·server·battery·not_ready (patrol·resume으로만 풀림)
         self.acked = False        # 지금 이동(F)을 보드가 ok 했는지
         self.await_ack = None     # 보드 답을 기다리는 F를 보낸 시각
         self.line_lost_since = None
@@ -76,6 +78,10 @@ class Agent:
         self.target = None        # go·dock 목표 구역(마커)
         self.resume_to = None     # 막힘·과열·정지가 끝나면 돌아갈 상태
         self.temp_c = None
+        self.alive_at = None      # 서버 신호를 마지막으로 받은 시각 (None: 아직 한 번도 못 받음 → 감시 안 함)
+        self.server_lost = False
+        self.solo = None          # 단독 모드에서 멈추러 가는 중: {"from": 끊길 때 마커, "by": 늦어도 멈출 시각}
+        self.battery_low_since = None
 
         self.blocked = None       # {"since", "person", "reported"}
         self.heat = None          # {"temps", "next", "flame", "flame_hit", "reported", "until"}
@@ -134,8 +140,10 @@ class Agent:
     def step(self):
         now = self.clock()
         self._drain(self.dog.inbox, self.on_board)
-        self._drain(self.reporter.inbox, lambda m: self.on_command(m[1]) if m[0] == "cmd" else self.on_mode(m[1]))
+        self._drain(self.reporter.inbox, self.on_server)
         self._watch_link(now)
+        self._watch_server(now)
+        self._watch_battery(now)
         self._thermo(now)
         self._vision(now)
         self._keepalive(now)
@@ -191,6 +199,7 @@ class Agent:
             self.resume_to = self.status
         log.warning("안전 정지 (%s) → 서버 resume·patrol을 기다림", reason)
         self.hold = reason
+        self.solo = None
         self.near, self.line_lost_since = 0, None
         if self.status in MOVING or self.status == "blocked":
             self.blocked = None
@@ -219,6 +228,8 @@ class Agent:
             return "보드 연결 없음"
         if self.clock() - self.last_d > config.SENSOR_STALE_S:
             return "보드 측정값(D)이 안 옴"
+        if self._battery_low():
+            return "배터리 %s%% (%d%% 이하)" % (self.board.battery, config.BATTERY_STOP_PCT)
         if self.board.commands is not None and "F" not in self.board.commands:
             return "보드가 F를 지원하지 않음 (main.py 확인)"
         if config.LINE_GUARD and "line" in self.board.chans:
@@ -302,6 +313,8 @@ class Agent:
                 log.info("목표 %s 도착", self.target)
                 self.target = None
                 self._halt("idle")
+            elif self.solo and self.status in MOVING and not _same(val, self.solo["from"]):
+                self._solo_stop("다음 마커 %s" % val)
         elif ch == "done":
             self._move(force=True)
         elif ch == "lost":  # 보드가 놓친 선을 제자리 돌며 찾다가 못 찾고 멈춤 (val = 돈 각도)
@@ -408,11 +421,76 @@ class Agent:
             if self.status in MOVING or self.status == "blocked":
                 self.resume_to = status
                 self._halt("idle")
-            self.hold = self.hold or "not_ready"
+            self.hold = "battery" if self._battery_low() else (self.hold or "not_ready")
             return
+        self.solo = None
         self.status, self.target, self.resume_to = status, target, None
         self.blocked, self.hold, self.near, self.line_lost_since = None, None, 0, None
         self._move(force=True)
+
+    def on_server(self, item):
+        kind, msg = item
+        if kind == "cmd":
+            self.on_command(msg)
+        elif kind == "mode":
+            self.on_mode(msg)
+        elif kind == "alive":
+            self.on_alive(msg)
+
+    def on_alive(self, msg):
+        """서버가 1초마다 보내는 살아 있다는 신호. 다시 와도 스스로 걷지 않음 (서버가 위치를 보고 resume)"""
+        self.alive_at = self.clock()
+        if self.server_lost:
+            log.info("서버 신호 다시 옴 → 멈춘 채 서버 resume·patrol을 기다림")
+            self.server_lost = False
+        mode = msg.get("mode") if isinstance(msg, dict) else None
+        if mode in protocol.MODES and mode != self.mode:  # 끊긴 동안 놓친 mode 바꿈을 맞춤
+            self.on_mode({"mode": mode})
+
+    def _watch_server(self, now):
+        """서버 신호가 ALIVE_TIMEOUT_S 안 오면 단독 모드: 걷는 중이면 다음 마커까지 가서 멈춤, 막힘·과열 확인 중이면 끝나도 안 걸음"""
+        if self.solo and now >= self.solo["by"] and self.status in MOVING:
+            self._solo_stop("%.0f초 안에 다음 마커가 안 나옴" % config.SERVER_STOP_MAX_S)
+        if self.solo and self.status not in MOVING:  # 그사이 막힘·과열·안전 정지·서버 명령으로 이미 멈춤
+            self.solo = None
+            if self.status in ("blocked", "heat_check"):
+                self.hold = self.hold or "server"
+        if config.ALIVE_TIMEOUT_S <= 0 or self.alive_at is None or self.server_lost:
+            return
+        if now - self.alive_at <= config.ALIVE_TIMEOUT_S:
+            return
+        self.server_lost = True
+        log.warning("서버 신호가 %.0f초 넘게 안 옴 → 단독 모드", now - self.alive_at)
+        if self.hold:
+            return
+        if self.status in MOVING:
+            self.solo = {"from": self.marker, "by": now + config.SERVER_STOP_MAX_S}
+            log.warning("단독 모드: 다음 마커까지 가서 멈춤 (지금 마커 %s)", self.marker)
+        elif self.status in ("blocked", "heat_check"):
+            self.hold = "server"
+
+    def _solo_stop(self, why):
+        log.warning("단독 모드 정지 (%s) → 서버 resume·patrol을 기다림", why)
+        self.solo = None
+        self.resume_to = self.status
+        self._halt("idle")
+        self.hold = "server"
+
+    def _battery_low(self):
+        b = self.board.battery
+        return b is not None and b <= config.BATTERY_STOP_PCT
+
+    def _watch_battery(self, now):
+        """배터리가 BATTERY_STOP_PCT 이하로 BATTERY_LOW_S 동안 계속되면 그 자리에서 멈춤 (걷는 중 전압이 잠깐 떨어지는 것은 무시)"""
+        if not self._battery_low():
+            self.battery_low_since = None
+            return
+        if self.battery_low_since is None:
+            self.battery_low_since = now
+            return
+        if now - self.battery_low_since >= config.BATTERY_LOW_S and self.status in WATCHED and self.hold != "battery":
+            log.warning("배터리 %s%% → 멈춤", self.board.battery)
+            self._safe_halt("battery")
 
     def on_mode(self, msg):
         mode = msg.get("mode")

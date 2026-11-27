@@ -54,7 +54,7 @@ class Reporter:
         self.photo_dir = self.spool / "photos"
         self.photo_dir.mkdir(parents=True, exist_ok=True)
         self.outbox_file = self.spool / "outbox.jsonl"
-        self.inbox = queue.Queue()  # 서버에서 온 것: ("cmd", {...}) · ("mode", {...})
+        self.inbox = queue.Queue()  # 서버에서 온 것: ("cmd", {...}) · ("mode", {...}) · ("alive", {...})
         self.client = None
         self.connected = False
         self._lock = threading.Lock()
@@ -127,6 +127,7 @@ class Reporter:
         # 다시 붙을 때마다 구독. clean session이라 끊긴 동안의 명령은 브로커가 쌓아 두지 않음 (옛 이동 명령이 늦게 오지 않게)
         client.subscribe(protocol.topic(self.robot, "cmd"), qos=1)
         client.subscribe(protocol.MODE_TOPIC, qos=1)
+        client.subscribe(protocol.ALIVE_TOPIC, qos=0)
         log.info("MQTT 연결됨 %s:%d (구독 %s)", self.host, self.port, protocol.topic(self.robot, "cmd"))
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties):
@@ -142,6 +143,10 @@ class Reporter:
             return
         if m.topic == protocol.MODE_TOPIC:
             self.inbox.put(("mode", msg))
+        elif m.topic == protocol.ALIVE_TOPIC:
+            if getattr(m, "retain", False):  # 보관된 신호는 서버가 지금 살아 있다는 뜻이 아님
+                return
+            self.inbox.put(("alive", msg))
         elif protocol.parse_topic(m.topic) == (self.robot, "cmd"):
             if getattr(m, "retain", False):  # 브로커에 남아 있던 옛 명령 (다시 붙을 때마다 와서 지난 patrol이 다시 실행됨)
                 log.warning("브로커에 보관된(retained) 명령 버림: %s", msg)

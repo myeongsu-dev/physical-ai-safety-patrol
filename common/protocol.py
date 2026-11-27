@@ -28,6 +28,7 @@ def parse_dog(line):
 ROOT = "potent"
 KINDS = ("state", "event", "cmd")
 MODE_TOPIC = ROOT + "/mode"
+ALIVE_TOPIC = ROOT + "/server/alive"   # 서버 → 전체, 1초마다 {"ts", "mode"} (retain 없음). 끊기면 Pi는 다음 마커에서 멈춤
 
 EVENT_TYPES = ("obstacle", "floor_object", "helmet", "heat", "flame")
 COMMANDS = ("patrol", "stop", "resume", "go", "wait", "dock", "guide")

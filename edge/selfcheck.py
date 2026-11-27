@@ -265,10 +265,13 @@ def check_messages(spool):
     on("potent/B/cmd", b'[1, 2]')                           # 객체가 아님
     on("potent/B/cmd", b'{"cmd":"patrol"}', retain=True)    # 브로커에 남은 옛 명령
     on("potent/mode", b'{"mode":"normal"}')
+    on("potent/server/alive", b'{"ts":1,"mode":"normal"}')
+    on("potent/server/alive", b'{"ts":0,"mode":"normal"}', retain=True)  # 보관된 신호는 살아 있다는 뜻이 아님
     got = []
     while not r.inbox.empty():
         got.append(r.inbox.get())
-    assert got == [("cmd", {"cmd": "patrol", "role": "A"}), ("mode", {"mode": "normal"})], got
+    assert got == [("cmd", {"cmd": "patrol", "role": "A"}), ("mode", {"mode": "normal"}),
+                   ("alive", {"ts": 1, "mode": "normal"})], got
 
     assert line_side(80) == "straight" and line_side(59) == "left" and line_side(101) == "right"
     assert line_side(-1) == "lost" and line_side(None) == "lost" and line_side(60) == line_side(100) == "straight"
@@ -484,6 +487,97 @@ def check_patrol(spool):
     assert dog.sent[0] == ("S",) and states[-1]["status"] == "idle"
 
 
+def alive(ag, clock, secs, mode="normal"):
+    """서버가 1초마다 potent/server/alive를 보내는 동안"""
+    for _ in range(int(round(secs))):
+        ag.reporter.inbox.put(("alive", {"ts": int(clock.t), "mode": mode}))
+        run(ag, clock, 1.0)
+
+
+def check_server(spool):
+    """서버 신호가 끊기면 다음 마커까지 가서 멈춤(hold server), 다시 붙어도 resume을 기다림. 배터리 15% 정지"""
+    ag, dog, th, clock, events, states = make(spool)
+    run(ag, clock, 0.5)
+
+    # 서버 신호를 한 번도 못 받았으면(예전 서버) 감시 안 함: 계속 걸음
+    ag.on_command(protocol.command("patrol", role="A"))
+    run(ag, clock, config.ALIVE_TIMEOUT_S * 3)
+    assert ag.status == "patrol" and ag.hold is None
+
+    # 신호가 오다가 끊김 → 단독 모드. 다음 마커 전까지는 계속 걷고(F 다시 보냄), 마커를 읽으면 멈춤
+    dog.inject("E", 1, "color", 3)
+    alive(ag, clock, 3)
+    assert ag.status == "patrol" and not ag.server_lost
+    dog.sent.clear()
+    run(ag, clock, config.ALIVE_TIMEOUT_S + config.MOVE_MS / 1000)
+    assert ag.server_lost and ag.solo and ag.status == "patrol" and ag.hold is None and F() in dog.sent
+    dog.inject("E", 2, "color", 3)   # 같은 마커가 다시 보임 → 아직
+    run(ag, clock, 0.2)
+    assert ag.status == "patrol"
+    dog.inject("E", 3, "color", 7)   # 다음 마커
+    run(ag, clock, 0.2)
+    assert ag.status == "idle" and ag.hold == "server" and dog.sent[-1] == ("S",)
+    assert ag.state()["hold"] == "server" and states[-1]["hold"] == "server" and states[-1]["marker"] == 7
+
+    # 다시 붙어도 스스로 안 걸음 → resume으로만
+    dog.sent.clear()
+    alive(ag, clock, 3 + config.MOVE_MS / 1000)
+    assert not ag.server_lost and ag.status == "idle" and ag.hold == "server" and F() not in dog.sent
+    alive(ag, clock, 1)
+    ag.on_command(protocol.command("resume"))
+    run(ag, clock, 0.3)
+    assert ag.status == "patrol" and ag.hold is None and dog.sent[-1] == F()
+
+    # 끊긴 뒤 다음 마커가 SERVER_STOP_MAX_S 안 나오면 그 자리에서 멈춤
+    alive(ag, clock, 2)
+    run(ag, clock, config.ALIVE_TIMEOUT_S + config.SERVER_STOP_MAX_S - 1)
+    assert ag.status == "patrol" and ag.solo
+    run(ag, clock, 1.5)
+    assert ag.status == "idle" and ag.hold == "server" and ag.solo is None
+
+    # 끊긴 동안 막혔으면 물건이 치워져도 안 걸음
+    alive(ag, clock, 1)
+    ag.on_command(protocol.command("patrol"))
+    run(ag, clock, 0.3)
+    alive(ag, clock, 1)
+    run(ag, clock, config.ALIVE_TIMEOUT_S + 0.5)
+    dog.sonar = 10.0
+    run(ag, clock, 0.4)
+    assert ag.status == "blocked" and ag.hold == "server"
+    dog.sonar = 60.0
+    run(ag, clock, 0.5)
+    assert ag.status == "idle" and ag.hold == "server"
+
+    # 신호의 mode로 끊긴 동안 놓친 대피 모드를 맞춤
+    alive(ag, clock, 1, mode="evacuate")
+    assert ag.mode == "evacuate"
+    alive(ag, clock, 1)
+    assert ag.mode == "normal"
+
+    # 배터리 15% 이하가 BATTERY_LOW_S 동안 계속되면 그 자리에서 멈춤. 잠깐 떨어진 것은 무시
+    ag, dog, th, clock, events, states = make(spool)
+    run(ag, clock, 0.5)
+    ag.on_command(protocol.command("patrol"))
+    run(ag, clock, 0.5)
+    low = 6400 + (config.BATTERY_STOP_PCT - 1) / 100 * 2000   # mV
+    dog.bat = low
+    run(ag, clock, config.BATTERY_LOW_S - 1)
+    dog.bat = 7800
+    run(ag, clock, 0.5)
+    assert ag.status == "patrol"
+    dog.bat = low
+    run(ag, clock, config.BATTERY_LOW_S + 0.5)
+    assert ag.status == "idle" and ag.hold == "battery" and ag.state()["battery"] <= config.BATTERY_STOP_PCT
+    ag.on_command(protocol.command("patrol"))   # 배터리가 그대로면 patrol도 안 됨
+    run(ag, clock, 0.3)
+    assert ag.status == "idle" and ag.hold == "battery"
+    dog.bat = 7800
+    run(ag, clock, 0.3)
+    ag.on_command(protocol.command("patrol"))
+    run(ag, clock, 0.3)
+    assert ag.status == "patrol" and ag.hold is None
+
+
 def check_web(spool):
     """디버그 웹 화면: 상태 JSON·기록·사진이 나오고 마지막 인식 결과가 담기는지 (빈 포트로 실제로 띄움)"""
     import json
@@ -527,5 +621,6 @@ if __name__ == "__main__":
         check_messages(Path(d) / "m")
         check_agent(Path(d) / "a")
         check_patrol(Path(d) / "p")
+        check_server(Path(d) / "s")
         check_web(Path(d) / "w")
     print("edge ok")

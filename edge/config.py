@@ -58,6 +58,10 @@ ACK_TIMEOUT_S = _get("ACK_TIMEOUT_S", 1.5, float)        # F를 보낸 뒤 보�
 SENSOR_STALE_S = _get("SENSOR_STALE_S", 1.0, float)     # 걷는 중 측정값(D)이 이만큼 안 오면 Pi가 멈춤 (보드 끊김·재시작)
 LINE_GUARD = _get("LINE_GUARD", 1, _int)                 # 선을 못 찾으면(line=-1) Pi가 멈춤 (보드 F는 선을 놓치면 직진함)
 LINE_LOST_S = _get("LINE_LOST_S", 10.0, float)           # 선이 이만큼 계속 안 보이면 멈춤 (보드가 먼저 0.6초 걸으며 꺾고 최대 8초 제자리 돌며 찾은 뒤 E lost를 보냄, 이건 그 뒤 예비)
+ALIVE_TIMEOUT_S = _get("ALIVE_TIMEOUT_S", 5.0, float)    # 서버 신호(potent/server/alive)가 이만큼 안 오면 단독 모드: 다음 마커에서 멈춤 (0이면 끔)
+SERVER_STOP_MAX_S = _get("SERVER_STOP_MAX_S", 20.0, float)  # 단독 모드에서 다음 마커가 이만큼 안 나오면 그 자리에서 멈춤
+BATTERY_STOP_PCT = _get("BATTERY_STOP_PCT", 15, _int)   # 배터리가 이 % 이하로 BATTERY_LOW_S 동안 계속되면 그 자리에서 멈춤 (map_config BATTERY_EMERGENCY)
+BATTERY_LOW_S = _get("BATTERY_LOW_S", 3.0, float)        # 걸을 때 전압이 잠깐 떨어지는 것은 무시
 PI_GUARD = _get("PI_GUARD", 1, _int)                     # F(선 따라가기) 중 Pi도 초음파로 멈춤(보조)
 SONAR_STOP_CM = _get("SONAR_STOP_CM", 14.0, float)
 SONAR_RESUME_CM = _get("SONAR_RESUME_CM", 18.0, float)

@@ -29,13 +29,15 @@
 | 서버 `guide` | 정지 + `L\|arrow\|left` 같은 LED 화살표. `mode normal`이 오면 끔 | |
 | 서버 `patrol`·`resume` | 보드 연결·측정값·선이 보일 때만 `F`. 보드 `F\|ok`가 와야 state가 `patrol` (`role`도 알림) | state `status`·`role` |
 | 서버 `stop` | `S`, 서버가 `resume`·`patrol`을 보내기 전에는 `F`를 다시 보내지 않음 | state `idle`, `hold` `stop` |
+| 서버 신호 끊김 | `potent/server/alive`가 5초(`ALIVE_TIMEOUT_S`) 안 오면 다음 마커까지 가서 `S` (20초 안에 마커가 없으면 그 자리). 다시 붙어도 `resume`·`patrol`을 기다림 | state `idle`, `hold` `server` |
+| 배터리 부족 | 15%(`BATTERY_STOP_PCT`) 이하가 3초 계속되면 그 자리에서 `S`, 배터리가 그대로면 `patrol`도 안 받음 | state `idle`, `hold` `battery` |
 | 안전 정지 | 선 유실 1초, 보드 끊김·다시 붙음, 측정값 끊김, `F` 거부·무응답 → `S`, 다시 붙어도 저절로 안 걸음 ([PATROL.md](PATROL.md)) | state `idle`, `hold`에 이유 |
 
 state는 1초마다, 그리고 새 마커를 읽은 순간과 멈춘 순간에 바로 보냄
 
 state의 `status`: `idle`(대기) · `patrol`(순찰) · `blocked`(막힘 정지) · `heat_check`(과열 확인) · `go`(출동) · `guide`(대피 안내) · `dock`(복귀)
 
-state의 `hold`: 다시 걷지 않는 이유. 없으면 `null`, 있으면 `stop` · `wait` · `guide`(서버 명령) · `line` · `link` · `stream` · `board` · `no_ack` · `send`(안전 정지) · `not_ready`(걸을 준비 안 됨) · `exit`(프로그램 종료). 서버 `patrol`·`resume`으로만 풀리고, 서버는 `null`일 때만 자동 출발시킴
+state의 `hold`: 다시 걷지 않는 이유. 없으면 `null`, 있으면 `stop` · `wait` · `guide`(서버 명령) · `line` · `link` · `stream` · `board` · `no_ack` · `send`(안전 정지) · `server`(서버 신호 끊김) · `battery`(배터리 15% 이하) · `not_ready`(걸을 준비 안 됨) · `exit`(프로그램 종료). 서버 `patrol`·`resume`으로만 풀리고, 서버는 `null`일 때만 자동 출발시킴
 
 ## 실행
 
