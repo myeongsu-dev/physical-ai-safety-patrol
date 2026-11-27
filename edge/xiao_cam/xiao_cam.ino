@@ -26,6 +26,7 @@
 const framesize_t FRAME = FRAMESIZE_VGA;  // 640×480
 const int QUALITY = 12;                    // 낮을수록 화질↑ 크기↑ (10~15)
 const uint32_t FRAME_GAP_MS = 60;          // 약 15장/초
+const bool FLIP = true;                    // 카메라를 거꾸로 달았으면 true: 위아래·좌우를 함께 뒤집어 180° 돌림
 
 void setup() {
   Serial.setTxBufferSize(32 * 1024);
@@ -50,6 +51,11 @@ void setup() {
 
   while (esp_camera_init(&c) != ESP_OK) {
     delay(1000);  // 카메라를 못 찾으면 1초마다 다시 (Pi는 장이 안 오는 것으로 앎)
+  }
+  sensor_t *s = esp_camera_sensor_get();
+  if (s && FLIP) {
+    s->set_vflip(s, 1);
+    s->set_hmirror(s, 1);
   }
 }
 
