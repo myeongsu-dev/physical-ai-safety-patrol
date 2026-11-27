@@ -16,7 +16,7 @@ import time
 
 from common import protocol
 from server import map_config
-from server.route import shortest_path
+from server import route
 
 log = logging.getLogger("fake")
 
@@ -35,8 +35,7 @@ class FakeRobot:
         self.status = "idle"
         self.role = None
         self.marker = map_config.DOCK_MARKER
-        self.path = []          # 앞으로 지날 마커
-        self.lap = []           # 순찰 고리 (다 돌면 다시 채움)
+        self.prev = None        # 지난 마커 (갈림길 방향을 정할 때 진행 방향)
         self.target = None
         self.resume_to = None
         self.until = 0.0        # blocked · heat_check 끝나는 시각
@@ -67,12 +66,7 @@ class FakeRobot:
             if role not in protocol.ROLES:
                 log.warning("%s: 역할 없이 patrol, 버림", self.name)
                 return
-            if role != self.role or not self.lap:
-                self.role = role
-                route = map_config.ROUTES[role]
-                start = route["entry"] if self.marker == map_config.DOCK_MARKER else []
-                self.path = [m for m in start if m != self.marker]
-                self.lap = []
+            self.role = role
             self.status, self.target, self.hold = "patrol", None, None
         elif cmd == "stop":
             self.hold = "stop"
@@ -87,8 +81,6 @@ class FakeRobot:
             if self.target not in map_config.MARKERS:
                 log.warning("%s: 모르는 구역 %s", self.name, self.target)
                 return
-            path = shortest_path(self.marker, self.target)   # 지도 길을 따라 (서버 교통 정리가 마커마다 세울 수 있게)
-            self.path = path[1:] if path else [self.target]
             self.status = cmd
         elif cmd == "wait":
             self.status, self.hold = "idle", "wait"
@@ -137,16 +129,18 @@ class FakeRobot:
         return out
 
     def _step(self):
-        if not self.path and self.status == "patrol":
-            if not self.lap:
-                self.lap = list(map_config.ROUTES[self.role]["loop"])
-            self.path = [self.lap.pop(0)]
-        if not self.path:
+        """Pi + 보드처럼: 동선 목록 없이 마커마다 route.turn_at으로 방향만 정하고, 보드는 선을 따라 그 방향으로"""
+        turn = route.turn_at(self.role, self.prev, self.marker, self.status,
+                             zone=self.target if self.status == "go" else None)
+        nxt = route.drive(self.prev, self.marker, turn)
+        if nxt is None:
+            log.warning("%s: 마커 %s에서 갈 길을 모름 (방향 %s) → 멈춤", self.name, self.marker, turn)
+            self.status, self.hold = "idle", "line"
             return
-        self.marker = self.path.pop(0)
+        self.prev, self.marker = self.marker, nxt
         self.battery = max(0.0, self.battery - DRAIN_PER_MARKER)
         if self.status in ("go", "dock") and self.marker == self.target:
-            self.status, self.target = ("idle" if self.status == "go" else "dock"), None
+            self.status, self.target = "idle", None   # Pi(edge/agent.py)도 목표에 닿으면 idle로 멈춤
             if self.marker == map_config.DOCK_MARKER:
                 self.battery = 100.0       # 관리실에서 사람이 충전했다고 침
 
@@ -228,7 +222,7 @@ def selfcheck():
     b.on_cmd(protocol.command("dock"))
     for _ in range(80):                                            # 지도 길을 따라 도크까지
         now[0] += 1; b.tick(chance=0)
-    assert b.status == "dock" and b.marker == map_config.DOCK_MARKER and b.battery == 100
+    assert b.status == "idle" and b.marker == map_config.DOCK_MARKER and b.battery == 100
     b.on_mode({"mode": "evacuate"}); b.on_cmd(protocol.command("guide", arrow="left"))
     assert b.status == "guide"
     b.on_mode({"mode": "normal"}); assert b.status == "idle"

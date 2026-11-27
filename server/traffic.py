@@ -142,32 +142,41 @@ class Traffic:
 
     # ---------- Server가 부르는 것 ----------
     def on_state(self, robot, active=True):
-        """state를 받을 때마다. 마커가 바뀌었을 때만 판단한다. active=False(대피 중)면 위치만 기억."""
+        """state를 받을 때마다. 예약은 마커가 바뀌었을 때만 판단한다. active=False(대피 중)면 위치만 기억."""
         s = self.fleet.robots.get(robot, {})
-        if self.kind(robot) in ("dock", "go") and s.get("status") == "idle" and s.get("hold") is None:
-            # Pi는 도착하면 idle로 멈춤. 다시 켜져도 idle. 어느 쪽이든 더는 가는 중이 아님
-            # (교통 정리로 세운 로봇은 hold=wait이라 여기 안 옴)
-            self.intent.pop(robot, None)
-            if s.get("marker") in (map_config.DOCK_MARKER, None):
-                self.lanes = {l: o for l, o in self.lanes.items() if o != robot}
-        marker = s.get("marker")
-        if marker not in map_config.MARKERS or marker == self.cur.get(robot):
-            return []
-        self.prev[robot], self.cur[robot] = self.cur.get(robot), marker
+        marker, status, hold = s.get("marker"), s.get("status"), s.get("hold")
+        moved = marker in map_config.MARKERS and marker != self.cur.get(robot)
+        if moved:
+            self.prev[robot], self.cur[robot] = self.cur.get(robot), marker
         if not active:
             return []
-        self._drop(robot)
-        for lane, owner in list(self.lanes.items()):
-            if owner == robot and marker not in map_config.SINGLE_LANES[lane]:
-                del self.lanes[lane]          # 한 줄 길을 빠져나감
+        if moved:
+            self._drop(robot)
+            for lane, owner in list(self.lanes.items()):
+                if owner == robot and marker not in map_config.SINGLE_LANES[lane]:
+                    del self.lanes[lane]          # 한 줄 길을 빠져나감
         k = self.kind(robot)
-        if k == "dock" and marker == map_config.DOCK_MARKER or \
-                k == "go" and marker == self.intent[robot].get("zone"):
-            self.intent.pop(robot, None)      # 도착
-            if marker == map_config.DOCK_MARKER:
+        target = map_config.DOCK_MARKER if k == "dock" else self.intent.get(robot, {}).get("zone")
+        if k in ("dock", "go") and (moved and marker == target or status == "idle" and hold is None):
+            # 도착했거나, Pi가 정지 이유 없이 idle(도착 · 다시 켜짐)을 보냄 → 더는 가는 중이 아님
+            # (교통 정리로 세운 로봇은 hold=wait이라 여기 안 옴)
+            self.intent.pop(robot, None)
+            self.waiting.pop(robot, None)
+            if marker in (map_config.DOCK_MARKER, None):
                 self.lanes = {l: o for l, o in self.lanes.items() if o != robot}
             return []
-        if robot in self.waiting:             # 기다리라고 했는데 마커가 바뀜 (wait이 늦게 닿음): 다시 판단
+        if self.lanes.get(DOCK_LANE) == robot and marker in (map_config.DOCK_MARKER, None) \
+                and status in ("idle", "dock") and hold not in (None, "wait"):
+            # 출발하려던 로봇이 충전 스테이션에서 정지 이유와 함께 멈춤 (선 못 찾음 등): 도크 길을 풀어 복귀 로봇이 들어오게
+            log.warning("%s 충전 스테이션에서 멈춤 (%s) → 도크 길 풂", robot, hold)
+            del self.lanes[DOCK_LANE]
+            self._drop(robot)
+            return []
+        if not moved:
+            return []
+        if marker == map_config.DOCK_MARKER:
+            return []                             # 충전 스테이션에서 쉼. 다음 출발은 서버가 departed로
+        if robot in self.waiting:                 # 기다리라고 했는데 마커가 바뀜 (wait이 늦게 닿음): 다시 판단
             del self.waiting[robot]
         return self._maybe_dock(robot, marker) + self._plan(robot)
 
@@ -309,7 +318,14 @@ if __name__ == "__main__":
     f.update_state("A", {"marker": None, "status": "idle", "hold": None, "battery": 70}); t.on_state("A")
     assert t.busy() == set()
 
-    # 7) 설정을 바꾸면 그대로 따름: 배터리 먼저로 바꾸면 순찰 중이어도 배터리 낮은 쪽이 먼저
+    # 7) 출발하려던 로봇이 충전 스테이션에서 멈추면(hold) 도크 길을 풂
+    t = fresh(); f.roles.update({"A": "A"})
+    f.update_state("A", {"marker": 16, "status": "idle", "hold": None, "battery": 90}); t.on_state("A")
+    t.departed("A"); assert not t.can_depart()
+    f.update_state("A", {"marker": 16, "status": "idle", "hold": "line", "battery": 90}); t.on_state("A")
+    assert t.can_depart()
+
+    # 8) 설정을 바꾸면 그대로 따름: 배터리 먼저로 바꾸면 순찰 중이어도 배터리 낮은 쪽이 먼저
     saved = map_config.TIE_BREAK
     map_config.TIE_BREAK = ("battery", "name")
     t = fresh()

@@ -14,7 +14,7 @@ turn_at이 돌려주는 것
 - "follow": 갈림길이 아님 (모서리 · 곧은 길). 보드가 선을 그냥 따라가면 됨
 - None: 다음 마커를 모름 (지난 마커를 모르는데 갈 곳이 여럿, 동선에 없는 마커 등). 멈추지 말고 선 따라가기로 둘지는 Pi가 정함
 
-going: "patrol"(역할 동선대로) · "dock"(충전 스테이션까지 최단 길) · "go"(zone까지 최단 길, 과열 확인 출동)
+going: "patrol"(역할 동선대로) · "dock"(충전 스테이션까지) · "go"(zone까지, 과열 확인 출동). dock · go는 U턴 없는 최단 길
 """
 import heapq
 import math
@@ -99,13 +99,49 @@ def shortest_path(start, goal, avoid=()):
     return path[::-1]
 
 
+def forward_path(prev, cur, goal):
+    """U턴 없이(온 길로 되돌아가지 않고) cur → goal 최단 경로 [cur, ..., goal]. 선 따라가는 로봇은 뒤로 못 돈다.
+    prev를 모르면 shortest_path와 같음. 길이 없으면 []"""
+    if prev not in map_config.MARKERS:
+        return shortest_path(cur, goal)
+    if cur == goal:
+        return [cur]
+    nb = edges()
+    start = (prev, cur)
+    best, back, heap = {start: 0.0}, {}, [(0.0, start)]
+    end = None
+    while heap:
+        d, (a, b) = heapq.heappop(heap)
+        if b == goal:
+            end = (a, b)
+            break
+        if d > best.get((a, b), 1e18):
+            continue
+        for c in sorted(nb[b]):
+            if c == a:
+                continue
+            nd = d + dist(b, c)
+            if nd < best.get((b, c), 1e18):
+                best[(b, c)], back[(b, c)] = nd, (a, b)
+                heapq.heappush(heap, (nd, (b, c)))
+    if end is None:
+        return []
+    path, node = [], end
+    while node != start:
+        path.append(node[1])
+        node = back[node]
+    return [cur] + path[::-1]
+
+
 def next_marker(role, prev, cur, going="patrol", zone=None):
-    """동선상 다음 마커 (모르면 None)"""
+    """동선상 다음 마커 (모르면 None). 충전 스테이션(막다른 곳)에서는 사람이 돌려놓으니 진행 방향을 잊고 나가는 길로"""
     if cur not in map_config.MARKERS:
         return None
+    if cur == map_config.DOCK_MARKER:
+        prev = None
     if going in ("dock", "go"):
         goal = map_config.DOCK_MARKER if going == "dock" else zone
-        path = shortest_path(cur, goal)
+        path = forward_path(prev, cur, goal)
         return path[1] if len(path) > 1 else None
     if role not in map_config.ROUTES:
         return None
@@ -134,6 +170,25 @@ def turn_at(role, prev, cur, going="patrol", zone=None):
     if prev not in map_config.MARKERS:
         return None   # 진행 방향을 모름
     return relative(compass(prev, cur), compass(cur, nxt))
+
+
+def drive(prev, cur, turn):
+    """보드가 선을 따라가며 실제로 닿는 다음 마커 (가짜 로봇 · 시험용).
+    갈림길에서는 turn 방향의 길, 아니면 온 길을 뺀 하나뿐인 길. 갈림길인데 방향이 없으면 직진(없으면 None)"""
+    nb = sorted(edges().get(cur, ()))
+    if len(nb) == 1:
+        return nb[0]                     # 막다른 곳(충전 스테이션): 돌아서 나감
+    ahead = [n for n in nb if n != prev] if prev is not None else nb
+    if prev not in map_config.MARKERS:
+        return ahead[0] if len(ahead) == 1 else None
+    heading = compass(prev, cur)
+    if turn in ("left", "right", "straight"):
+        hit = [n for n in ahead if relative(heading, compass(cur, n)) == turn]
+        return hit[0] if hit else None
+    if len(ahead) == 1:
+        return ahead[0]
+    hit = [n for n in ahead if relative(heading, compass(cur, n)) == "straight"]
+    return hit[0] if hit else None
 
 
 if __name__ == "__main__":
@@ -170,6 +225,27 @@ if __name__ == "__main__":
                 assert got == "follow", (role, prev, cur, got)
             prev = cur
 
+    # 2-1) 동선 목록 없이 갈림길 방향만으로 달려도(Pi + 보드가 할 일) 정해진 동선과 똑같이 도는지: 도크에서 출발해 세 바퀴
+    for role in map_config.ROUTES:
+        r = map_config.ROUTES[role]
+        want = r["entry"] + r["loop"] * 3
+        prev, cur, seen = None, want[0], [want[0]]
+        while len(seen) < len(want):
+            prev, cur = cur, drive(prev, cur, turn_at(role, prev, cur))
+            seen.append(cur)
+        assert seen == want, (role, seen)
+    # 2-2) 고리 어디서든 복귀(dock)를 받으면 방향만으로 충전 스테이션까지 감
+    for role in map_config.ROUTES:
+        loop = map_config.ROUTES[role]["loop"]
+        for i, cur in enumerate(loop):
+            prev, steps = loop[i - 1], 0
+            while cur != map_config.DOCK_MARKER and steps < 20:
+                prev, cur, steps = cur, drive(prev, cur, turn_at(role, prev, cur, going="dock")), steps + 1
+            assert cur == map_config.DOCK_MARKER, (role, loop[i - 1], loop[i])
+
+    assert forward_path(12, 11, 16)[:3] == [11, 10, 5]                # 도크 반대로 가던 로봇은 돌아서 감 (U턴 없음)
+    assert forward_path(None, 11, 16) == [11, 12, 15, 16]
+
     # 3) 복귀(dock): 복귀 지점에서 도크 쪽으로, 그 뒤 도크까지
     assert turn_at("A", 13, 12) == "straight" and turn_at("A", 13, 12, going="dock") == "left"
     assert turn_at("B", 8, 7) == "straight" and turn_at("B", 8, 7, going="dock") == "left"
@@ -177,7 +253,8 @@ if __name__ == "__main__":
     assert turn_at("B", 12, 15, going="dock") == "follow" and next_marker("B", 15, 16, going="dock") is None
     # 4) 출발: 도크 → 15 → 12에서 A는 왼쪽(11), B는 직진(7), B는 7에서 왼쪽(6)
     assert turn_at("A", 15, 12) == "left" and turn_at("B", 15, 12) == "straight" and turn_at("B", 12, 7) == "left"
-    assert next_marker("A", None, 16) == 15
+    assert next_marker("A", None, 16) == 15 and next_marker("B", 15, 16) == 15   # 충전 뒤 출발: 지난 마커가 15여도 나감
+    assert drive(15, 16, turn_at("A", 15, 16)) == 15
     # 5) 과열 확인 출동(go): 최단 길로. 9에서 출발해 3으로: 9 → 4 → 3 (위로 = 왼쪽, 서쪽에서 온 로봇 기준)
     assert next_marker("A", 14, 9, going="go", zone=3) in (4, 8)
     # 6) 모르는 경우
