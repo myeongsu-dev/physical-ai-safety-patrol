@@ -229,6 +229,26 @@ assert dt.ch_line() == 80
 Cam.line = [bytes([5, 30, 20, 20, 10, 40, 30]), bytes(7), bytes(7)]; assert dt.ch_line() == 30
 Cam.line = [bytes(7), bytes([5, 80, 60, 0, 0, 0, 0]), bytes([5, 40, 100, 0, 0, 0, 0])]; assert dt.ch_line() == 40  # 아래 먼저
 Cam.line = [bytes(7), bytes(7), bytes(7)]; assert dt.ch_line() == -1
+# 비전 모듈이 응답을 늦게 채우면 읽기 주소 바이트 0xA7(167)이 맨 앞에 와 한 칸 밀림 (#40, 로봇 A 실측 바이트 그대로)
+real = Cam.iic.readfrom
+def raw(b):
+    Cam.iic.readfrom = staticmethod(lambda addr, n: bytes(b))
+shifted = [167, 5, 15, 19, 0, 0, 31, 39, 5, 10, 59, 0, 40, 20, 79, 5, 5, 99, 0, 80, 10]
+raw(shifted); assert dt.line_xs() == (15, 10, 5)
+raw(shifted[1:] + [119]); assert dt.line_xs() == (15, 10, 5)       # 밀리지 않은 같은 값
+raw([167] + [0] * 20); assert dt.line_xs() == (-1, -1, -1)         # 밀렸는데 선 없음
+raw([167, 9] + [0] * 19)                                           # 자리가 안 맞으면 버림 (선 위치로 쓰지 않음)
+try:
+    dt.line_xs(); raise AssertionError("ValueError가 나야 함")
+except ValueError:
+    pass
+assert dt.read("line") == -1                                       # 채널은 -1 (선 따라가기는 놓친 것으로 봄)
+raw([5, 80, 99, 0, 0, 0, 0] + [0] * 14)                            # 위 구역인데 중심 y가 아래 구역이면 버림
+try:
+    dt.line_xs(); raise AssertionError("ValueError가 나야 함")
+except ValueError:
+    pass
+Cam.iic.readfrom = real
 Cam.line = [bytes(7), bytes([5, 80, 60, 70, 50, 90, 70]), bytes(7)]
 # LED: 숫자·글자는 됨, 모르는 모드는 오류로 답함
 assert cmd("L", "num", 88) == "CMD|L|ok|$" and "tube 88" in sent

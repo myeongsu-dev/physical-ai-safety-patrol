@@ -10,7 +10,7 @@ import time
 import Hiwonder_IIC
 from HW_MechDog import MechDog
 
-VERSION = "dog-1.18.1"  # 올리는 규칙은 README "버전". upload.py가 올릴 때 뒤에 +해시를 붙임
+VERSION = "dog-1.18.2"  # 올리는 규칙은 README "버전". upload.py가 올릴 때 뒤에 +해시를 붙임
 MAX_MS = 15000   # 이동 명령 한 번의 최대 시간
 QUIET_MS = 2000  # Pi가 이만큼 조용하면 정지 + LED 오류
 # 걸음: 발 드는 시간 · 딛는 시간(ms) · 다리 드는 높이 (공식 예제 change_gait_parameter.py 값). 켤 때 넣고, G로 바꿀 수 있음.
@@ -70,10 +70,19 @@ def ch_sonar():
 def line_xs():
     """(위 · 가운데 · 아래 구역 선 x), 못 찾으면 -1. x는 0~159, 가운데 80.
     patrol_cam의 0xB0을 읽으면 세 구역 7바이트 [ID, 중심x, 중심y, 좌상x, 좌상y, 우하x, 우하y]씩 21바이트.
-    레지스터 번호를 먼저 따로 써야 함(readfrom_mem처럼 이어서 읽으면 비전 모듈이 지난 레지스터 값을 줌, 2026-11-26 실기)"""
+    레지스터 번호를 먼저 따로 써야 함(readfrom_mem처럼 이어서 읽으면 비전 모듈이 지난 레지스터 값을 줌, 2026-11-26 실기).
+    비전 모듈이 응답을 늦게 채우면 읽기 주소 바이트(0x53<<1|1 = 0xA7)가 맨 앞에 와 한 칸 밀림(#40) → 첫 바이트가 ID가 아니면
+    한 칸 뒤부터 씀(아래 구역 마지막 1바이트만 잘림). 자리가 안 맞으면(ID 자리가 0 · 5가 아니거나 중심 y가 그 구역 밖) 오류"""
     cam.iic.writeto(0x53, bytes([0xB0]))
     c = cam.iic.readfrom(0x53, 21)
-    return tuple(c[i + 1] if c[i] else -1 for i in (0, 7, 14))
+    k = 0 if c[0] in LINE_IDS else 1
+    for z, i in enumerate((0, 7, 14)):
+        if c[k + i] not in LINE_IDS or (c[k + i] and not z * 40 <= c[k + i + 2] < z * 40 + 40):
+            raise ValueError("I2C 자리 안 맞음: %s" % list(c[:4]))
+    return tuple(c[k + i + 1] if c[k + i] else -1 for i in (0, 7, 14))
+
+
+LINE_IDS = (0, 5)  # 구역마다 첫 바이트: 0 못 찾음, 5 검정 띠 (patrol_cam BLACK_ID)
 
 
 def ch_line():
