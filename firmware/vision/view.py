@@ -228,7 +228,7 @@ def set_wifi(port):
             found = True
         elif ln.startswith("INFO") and found:  # SCAN 목록 뒤의 INFO = 목록 끝
             break
-    ssid = input("Wi-Fi 이름 (비우면 Wi-Fi 끔): ").strip()
+    ssid = input("Wi-Fi 이름 (저장한 목록 맨 앞에 넣음, 최대 4개. 비우면 모두 지움): ").strip()
     pw = getpass.getpass("비밀번호: ") if ssid else ""
     s.write(("WIFI %s\t%s\n" % (ssid, pw)).encode())
     end = time.time() + 20
@@ -239,7 +239,7 @@ def set_wifi(port):
             if ln.startswith("INFO") and "wifi=" in ln:
                 ip = ln.split("wifi=")[1].split()[0]
                 if ip not in ("connecting",):
-                    print("Wi-Fi:", ip, "(영상 http://patrol-cam.local/stream)" if ip != "off" else "")
+                    print("Wi-Fi:", ip, "(영상 http://<모듈 이름>.local/stream, 이름은 INFO의 name)" if ip != "off" else "")
                     return s.close()
     print("20초 안에 못 붙음. 이름·비밀번호(대소문자)와 2.4GHz인지 확인")
     s.close()
