@@ -399,12 +399,31 @@ async function bootApp(search, tag, { login } = {}) {
   };
 }
 
+// ---------- 누르는 처리가 있는 data-… 는 모두 click의 closest 목록에 있어야 함 ----------
+{
+  const src = (await import("node:fs")).readFileSync(new URL("./js/app.js", import.meta.url), "utf8");
+  const list = src.match(/closest\?\.\(\s*"([^"]+)"/)[1];
+  const kebab = (k) => k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
+  const used = new Set([...src.matchAll(/if \(t\.dataset\.(\w+)\)/g)].map((m) => m[1]));
+  assert.ok(used.has("themeToggle") && used.size > 10);
+  for (const k of used) assert.ok(list.includes(`[data-${kebab(k)}]`), `closest 목록에 [data-${kebab(k)}] 없음`);
+}
+
 {
   const app = await bootApp("?fake", "basic");
   const { el } = app;
   // 기본 화면의 관리자 화면 버튼: ?fake는 두고 admin을 붙인다
   assert.equal(el("view-switch").textContent, "관리자모드");
   assert.equal(el("view-switch").href, "./?fake&admin");
+  // 다크 모드 버튼: 누르면 해 아이콘 · "밝은 화면으로", 다시 누르면 달 · "다크 모드"
+  assert.equal(el("theme").title, "다크 모드");
+  await app.click({ themeToggle: "1" });
+  assert.equal(el("theme").title, "밝은 화면으로");
+  assert.equal(el("theme")["aria-pressed"], "true");
+  assert.match(el("theme").innerHTML, /<circle/);
+  await app.click({ themeToggle: "1" });
+  assert.equal(el("theme").title, "다크 모드");
+  assert.equal(el("theme")["aria-pressed"], "false");
   assert.equal(el("conn-status .value").textContent, "연결 정상 · 로봇 4/4");
   assert.equal(el("robot-list").innerHTML, ""); // 로봇 현황 카드는 관리자 화면에만 (칸은 HTML에서 hidden 그대로)
   assert.equal(el("mode").textContent, "평상시");
@@ -506,7 +525,7 @@ async function bootApp(search, tag, { login } = {}) {
   await tickWait();
   assert.equal(el("popup").hidden, true);
   assert.equal(kpi("통로 차단"), 1);
-  assert.match(el("kpis").innerHTML, /class="kpi warn kpi-btn" data-kpi="obstacle"/);
+  assert.match(el("kpis").innerHTML, /class="kpi warn kpi-btn" data-k="obstacle" data-kpi="obstacle"/);
   assert.equal(el("tab-badge").textContent, 1);
   assert.equal(el("tab-badge").hidden, false);
   await app.click({ kpi: "obstacle" });
