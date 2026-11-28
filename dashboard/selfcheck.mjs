@@ -399,6 +399,16 @@ async function bootApp(search, tag, { login } = {}) {
   };
 }
 
+// ---------- 누르는 처리가 있는 data-… 는 모두 click의 closest 목록에 있어야 함 ----------
+{
+  const src = (await import("node:fs")).readFileSync(new URL("./js/app.js", import.meta.url), "utf8");
+  const list = src.match(/closest\?\.\(\s*"([^"]+)"/)[1];
+  const kebab = (k) => k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
+  const used = new Set([...src.matchAll(/if \(t\.dataset\.(\w+)\)/g)].map((m) => m[1]));
+  assert.ok(used.has("themeToggle") && used.size > 10);
+  for (const k of used) assert.ok(list.includes(`[data-${kebab(k)}]`), `closest 목록에 [data-${kebab(k)}] 없음`);
+}
+
 {
   const app = await bootApp("?fake", "basic");
   const { el } = app;
@@ -1240,16 +1250,6 @@ class FakeAudioContext {
   assert.equal(fake.mode, "evacuate", "마커가 이상해도 대피는 됨");
   assert.equal(fake.evac.fire, null);
   app.stop();
-}
-
-// ---------- 누르는 처리가 있는 data-… 는 모두 click의 closest 목록에 있어야 함 ----------
-{
-  const src = (await import("node:fs")).readFileSync(new URL("./js/app.js", import.meta.url), "utf8");
-  const list = src.match(/closest\?\.\(\s*"([^"]+)"/)[1];
-  const kebab = (k) => k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
-  const used = new Set([...src.matchAll(/if \(t\.dataset\.(\w+)\)/g)].map((m) => m[1]));
-  assert.ok(used.has("themeToggle") && used.size > 10);
-  for (const k of used) assert.ok(list.includes(`[data-${kebab(k)}]`), `closest 목록에 [data-${kebab(k)}] 없음`);
 }
 
 console.log("dashboard selfcheck OK");
