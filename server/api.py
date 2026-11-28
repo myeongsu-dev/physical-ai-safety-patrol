@@ -193,7 +193,8 @@ class Server:
                 self.send_traffic(self.traffic.tick(exclude=self.heat.busy()))
             if self.auto_start and self.mode == "normal" and self.traffic.can_depart():
                 # 도크 길은 한 대씩: 길이 비었을 때 한 대만 내보내고, 그 로봇이 고리로 나가면 다음 로봇
-                for topic, msg in self.fleet.auto_assign(auto=True, exclude=self.heat.busy(), limit=1):
+                # 과열 확인 중이거나 도크 · 출동 지점으로 가는 중인 로봇은 빼고
+                for topic, msg in self.fleet.auto_assign(auto=True, exclude=self.heat.busy() | self.traffic.busy(), limit=1):
                     robot = topic.split("/")[1]
                     self.publish(topic, msg, own=True)
                     log.info("자동 출발 %s 역할 %s", robot, msg["role"])
@@ -534,6 +535,36 @@ def selfcheck():
             srv.on_mqtt("potent/A/state", protocol.pack({"marker": m, "status": "patrol", "battery": 80, "hold": None, "role": "A"}))
         srv.tick()
         assert srv.sent[-1] == ("potent/B/cmd", {"cmd": "resume"}), srv.sent
+        # 도크로 보낸 로봇은 도착할 때까지 자동 출발에서 뺌 (마커를 아직 못 읽어 도크로 보이는 로봇도)
+        now[0] += 100
+        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0])
+        srv.on_mqtt("potent/A/state", protocol.pack({"marker": None, "status": "patrol", "battery": 70, "hold": None}))
+        srv.publish(protocol.topic("A", "cmd"), protocol.command("dock"))
+        srv.on_mqtt("potent/A/state", protocol.pack({"marker": None, "status": "dock", "battery": 70, "hold": None}))
+        srv.sent.clear()
+        srv.tick()
+        assert not [m for _, m in srv.sent if m.get("cmd") == "patrol"], srv.sent
+        # ack 지연(2초)이 있는 로봇이 복귀해도 도크 길이 풀림 (#49: ack 대기 idle로 가는 중 기록이 지워지면 영구히 막힘)
+        from server.fake_robots import FakeRobot
+        now[0] += 100
+        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0])
+        bot = FakeRobot("A", battery=100, rng=__import__("random").Random(5), clock=lambda: now[0], ack_s=2)
+        seen, docked = 0, False
+        for _ in range(400):
+            now[0] += 1
+            bot.tick(chance=0)
+            srv.on_mqtt("potent/A/state", protocol.pack(bot.state()))
+            srv.tick()
+            for t_, m_ in srv.sent[seen:]:
+                if t_ == "potent/A/cmd":
+                    bot.on_cmd(m_)
+            seen = len(srv.sent)
+            if bot.marker == 11 and srv.auto_start:              # 나간 뒤 배터리를 낮추고 자동 출발은 끔
+                srv.auto_start, bot.battery = False, 20
+            if not srv.auto_start and bot.marker == map_config.DOCK_MARKER and bot.status == "idle":
+                docked = True
+                break
+        assert docked and srv.traffic.can_depart() and "A" not in srv.traffic.intent, (bot.marker, srv.traffic.lanes)
         # 관리자 잠금: 비밀번호를 정하면 경보 닫기·출발·명령·모드는 맞는 헤더가 있어야 함
         srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, admin_password="pw1234", auto_start=False)
         with TestClient(create_app(srv)) as c:
