@@ -1203,6 +1203,73 @@ class FakeAudioContext {
   assert.ok(!("checkedAt" in h[0]));
 }
 
+// ---------- 로봇 상태 (health, 이슈 #54 · edge #55) ----------
+{
+  const { robotHealth, safeLink, HEALTH_NOT_YET } = await import("./js/store.js");
+  const good = {
+    board: { ok: true, version: "dog-1.18.2", age_s: 0.16, line: 80, sonar_cm: 60, error: null },
+    cam: { ok: true, fps: 14, age_s: 0.04 },
+    model: { ready: false, version: null },
+    thermo: { ok: false },
+    pi: { cpu_temp_c: 46.9, cpu_pct: 23.4, mem_pct: 41, undervolt: false, throttled: false },
+    web: "http://192.168.0.141:8080",
+    floor_web: null,
+  };
+  assert.equal(robotHealth({ status: "patrol" }), null, "health가 없으면(예전 Pi) 표시 안 함");
+  const h = robotHealth({ health: good });
+  assert.deepEqual(h.problems, [], "아직 없는 AI 모델 · 온도 센서는 문제로 안 봄");
+  assert.deepEqual(h.notYet, ["AI 모델", "온도 센서"]);
+  assert.deepEqual(HEALTH_NOT_YET, ["model", "thermo"]);
+  assert.deepEqual(h.pi, ["46.9°C", "CPU 23%", "메모리 41%"]);
+  assert.equal(h.web, "http://192.168.0.141:8080");
+  assert.equal(h.floorWeb, null, "바닥 비전 화면이 꺼져 있으면 링크 없음");
+
+  const bad = robotHealth({ health: { ...good, board: { ...good.board, ok: false, error: "E1" }, cam: { ok: false, fps: 0, age_s: 6 },
+    pi: { ...good.pi, undervolt: true }, floor_web: "http://192.168.0.141:8090" } });
+  assert.deepEqual(bad.problems, ["보드 응답 없음 (마지막 오류 E1)", "카메라 영상 끊김", "Pi 전원 전압 부족"]);
+  assert.equal(bad.floorWeb, "http://192.168.0.141:8090");
+  // 보드가 괜찮으면 지난 오류는 안 보여 줌
+  assert.deepEqual(robotHealth({ health: { ...good, board: { ...good.board, error: "old" } } }).problems, []);
+  // Pi가 아닌 곳: pi 값이 모두 null이면 줄을 숨김, undervolt null은 문제 아님
+  const win = robotHealth({ health: { ...good, pi: { cpu_temp_c: null, cpu_pct: null, mem_pct: null, undervolt: null, throttled: null }, web: null } });
+  assert.deepEqual(win.pi, []);
+  assert.deepEqual(win.problems, []);
+  assert.equal(win.web, null);
+  // 링크는 http(s)만
+  for (const u of ["javascript:alert(1)", "http://a b", 'http://x"onmouseover', "ftp://x", 3, null]) assert.equal(safeLink(u), null, String(u));
+  assert.equal(safeLink("https://10.0.0.5:8080/"), "https://10.0.0.5:8080/");
+
+  // 관리자 화면 카드: 평소에는 Pi 줄 · 아직 없음 · 디버그 화면 링크, 고장이면 주황 줄과 문구 (소리 · 팝업 없음)
+  globalThis.AudioContext = FakeAudioContext;
+  const app = await bootApp("?fake&admin", "health");
+  const { el, fake } = app;
+  await tickWait(550);
+  await app.click({ sound: "1" });
+  const card = (label) => el("robot-list").innerHTML.split("<li").find((x) => x.includes(`>${label}<`));
+  assert.match(card("MD-1"), /Pi <span>46\.9°C<\/span> · <span>CPU 23%<\/span> · <span>메모리 41%<\/span>/);
+  assert.match(card("MD-1"), /아직 없음:<\/span> <span>AI 모델<\/span> · <span>온도 센서<\/span>/);
+  assert.match(card("MD-1"), /<a href="http:\/\/127\.0\.0\.1:8080" target="_blank" rel="noopener noreferrer">디버그 화면<\/a>/);
+  assert.ok(!card("MD-1").includes("바닥 비전 화면"));
+  assert.ok(!card("MD-1").includes("health-bad"));
+  beeps = 0;
+  fake.healthBad("A", "cam");
+  await tickWait();
+  assert.match(card("MD-1"), /class="ok health-bad"/);
+  assert.match(card("MD-1"), /<div class="place">[^<]*<\/div><div class="health-problem">카메라 영상 끊김<\/div>/, "문제 문구는 위치 바로 아래");
+  assert.equal(beeps, 0, "로봇 상태 문제는 소리 없음");
+  assert.equal(el("popup").hidden, true, "팝업 없음");
+  fake.healthOk("A");
+  await tickWait();
+  assert.ok(!card("MD-1").includes("health-bad"));
+  assert.ok(!card("MD-1").includes("카메라 영상 끊김"));
+  app.stop();
+
+  // 기본 화면에는 로봇 카드가 없으니 상태도 없음
+  const app2 = await bootApp("?fake", "health-basic");
+  assert.ok(!app2.el("robot-list").innerHTML.includes("디버그 화면"));
+  app2.stop();
+}
+
 // ---------- 불꽃 감지 팝업에서 화재 확정 → 대피 모드, 불난 곳은 그 경보의 마커 ----------
 {
   const app = await bootApp("?fake&admin", "fireconfirm");

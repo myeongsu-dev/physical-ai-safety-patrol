@@ -124,6 +124,12 @@
   - `hold` 값(edge/agent.py: wait, stop, guide, link, stream, no_ack, board, send, line, not_ready, exit, server, battery)은 "안전 정지: 선을 놓침" 같은 말로 보여 줍니다 (js/store.js HOLD_TEXT). `hold`가 없으면 "현장 확인 필요"
 - 배터리: 25% 이하면 충전 스테이션으로 복귀, 15% 이하면 그 자리에 멈춤 (`server/map_config.py`, 시험 뒤 바뀔 수 있음)
 - 프로그램 버전: 로봇마다 돌고 있는 Pi 프로그램의 git 커밋
+- 로봇 상태 (state의 `health`, 이슈 #54 · edge #55): 연결된 로봇만 보여 줍니다. `ok` 판단은 Pi가 하고 대시보드는 `ok` 값만 봅니다
+  - 문제가 있으면 카드 왼쪽 주황 줄과 위치 아래 한 줄 문구만 냅니다. 소리 · 팝업은 없습니다 (위험한 고장은 로봇이 `hold`로 멈춰 정지 이유가 따로 나옴)
+  - 문구: 보드 응답 없음 (보드가 응답 없을 때만 마지막 오류도), 카메라 영상 끊김, AI 모델 없음, 온도 센서 안 읽힘, Pi 전원 전압 부족, Pi 성능 제한
+  - 아직 로봇에 안 붙은 AI 모델 · 온도 센서는 false여도 "아직 없음"으로 흐리게 (`js/store.js` `HEALTH_NOT_YET`). 붙이면 거기서 지우면 그때부터 경고로 나옵니다
+  - Pi 온도 · CPU · 메모리 한 줄 (Pi가 아니라 값이 비면 숨김), "디버그 화면" · "바닥 비전 화면" 링크 (`http(s)://`로 시작할 때만, Pi와 같은 Wi-Fi에서만 열림)
+  - 가짜 서버: 콘솔 `fake.healthBad("A", "cam")` (`board` · `cam` · `undervolt`), 되돌리기 `fake.healthOk("A")`
 
 ## 지도
 

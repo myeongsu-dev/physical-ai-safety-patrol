@@ -263,3 +263,46 @@ export function connectionSummary(store, now = Date.now()) {
     robots,
   };
 }
+
+// 로봇 상태 (state의 health, 이슈 #54 · edge #55). Pi가 ok를 판단해 매초 state에 실어 보낸다.
+// 대시보드는 ok 값만 본다 (시간 기준을 따로 두지 않음). 문제가 있으면 카드 색과 한 줄 문구만 (소리 · 팝업 없음)
+//
+// 아직 로봇에 안 붙은 장치: false가 와도 문제로 보지 않고 "아직 없음"으로 흐리게 보여 준다.
+// 실제로 붙이면 여기서 지우면 된다 (그때부터 false면 경고 색)
+export const HEALTH_NOT_YET = ["model", "thermo"];
+
+const HEALTH_PARTS = [
+  // [칸, ok 값을 꺼내는 함수, 아직 없음일 때 이름, 문제일 때 문구]
+  ["board", (h) => h.board?.ok, "보드", (h) => (h.board?.error ? `보드 응답 없음 (마지막 오류 ${h.board.error})` : "보드 응답 없음")],
+  ["cam", (h) => h.cam?.ok, "카메라", () => "카메라 영상 끊김"],
+  ["model", (h) => h.model?.ready, "AI 모델", () => "AI 모델 없음"],
+  ["thermo", (h) => h.thermo?.ok, "온도 센서", () => "온도 센서 안 읽힘"],
+];
+
+// 로봇이 보낸 주소는 http(s)로 시작할 때만 링크로 쓴다 (javascript: 같은 것 막기)
+export function safeLink(url) {
+  return typeof url === "string" && /^https?:\/\/[^\s"'<>`]+$/i.test(url) ? url : null;
+}
+
+// { problems: [문구], notYet: [이름], pi: ["46.9°C", "CPU 23%", "메모리 41%"] (없으면 []), web, floorWeb } 또는 null (health 없음)
+export function robotHealth(msg) {
+  const h = msg?.health;
+  if (!h || typeof h !== "object") return null;
+  const problems = [], notYet = [];
+  for (const [part, ok, name, text] of HEALTH_PARTS) {
+    if (ok(h) !== false) continue; // 칸이 없거나 true면 문제 아님
+    if (HEALTH_NOT_YET.includes(part)) notYet.push(name);
+    else problems.push(text(h));
+  }
+  // Pi가 아닌 곳(Windows --fake 등)에서는 pi 값이 모두 null. true일 때만 문제
+  const p = h.pi ?? {};
+  if (p.undervolt === true) problems.push("Pi 전원 전압 부족");
+  if (p.throttled === true) problems.push("Pi 성능 제한 (과열 또는 전원)");
+  const num = (v) => typeof v === "number" && Number.isFinite(v);
+  const pi = [
+    num(p.cpu_temp_c) ? `${p.cpu_temp_c}°C` : null,
+    num(p.cpu_pct) ? `CPU ${Math.round(p.cpu_pct)}%` : null,
+    num(p.mem_pct) ? `메모리 ${Math.round(p.mem_pct)}%` : null,
+  ].filter(Boolean);
+  return { problems, notYet, pi, web: safeLink(h.web), floorWeb: safeLink(h.floor_web) };
+}

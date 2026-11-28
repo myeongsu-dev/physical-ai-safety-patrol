@@ -9,6 +9,7 @@ import { FakeServer } from "./fake.js";
 import { checkAdmin, withPassword, loadPassword, savePassword } from "./auth.js";
 import { VIEWBOX, baseMap, legendHtml, robotLayer, fireLayer, guideLayer, MARKER_POS } from "./map.js";
 import { createAlarm } from "./sound.js";
+import { robotHealth } from "./store.js";
 import { DOCK_MARKER, MARKERS } from "./mapdata.js";
 
 const store = createStore();
@@ -243,6 +244,21 @@ function versionLine(msg) {
   return `<div class="version">버전 ${esc(msg.version)}</div>`;
 }
 
+// 로봇 상태 (health) 아래 줄: Pi 값, 아직 없는 장치, 디버그 화면 링크 (같은 Wi-Fi에서만 열림).
+// 문제 문구는 위치 줄 바로 아래 (renderRobots)
+function healthHtml(h) {
+  if (!h) return "";
+  const links = [
+    h.web ? `<a href="${esc(h.web)}" target="_blank" rel="noopener noreferrer">디버그 화면</a>` : "",
+    h.floorWeb ? `<a href="${esc(h.floorWeb)}" target="_blank" rel="noopener noreferrer">바닥 비전 화면</a>` : "",
+  ].filter(Boolean);
+  // 항목마다 span: 카드가 좁으면 "·" 사이에서만 줄이 바뀐다
+  const items = (list) => list.map((x) => `<span>${esc(x)}</span>`).join(" · ");
+  return `${h.pi.length ? `<div class="health-pi">Pi ${items(h.pi)}</div>` : ""}${
+    h.notYet.length ? `<div class="health-notyet"><span>아직 없음:</span> ${items(h.notYet)}</div>` : ""}${
+    links.length ? `<div class="health-links">${links.join("")}</div>` : ""}`;
+}
+
 // 로봇 현황 카드
 function renderRobots(s, serverOpen, now) {
   document.getElementById("robot-count").textContent = `(${s.total}대)`;
@@ -262,6 +278,9 @@ function renderRobots(s, serverOpen, now) {
         state = "멈춤";
         cls += " stopped";
       }
+      // 로봇 상태 (health): 연결된 로봇만. 끊긴 로봇의 값은 지난 것이라 보여 주지 않는다
+      const health = admin && r.online ? robotHealth(msg) : null;
+      if (health?.problems.length) cls += " health-bad";
       const waiting = r.online && robotWaiting(msg);
       if (waiting) state = "서버 대기";
       if (!r.online) state = connText;
@@ -283,11 +302,12 @@ function renderRobots(s, serverOpen, now) {
       return `<li class="${cls}">
         <div class="top"><span class="dot"></span><span class="name">${esc(robotLabel(r.name))}</span>
           <span class="state">${esc(state)}</span></div>
-        <div class="place">${esc(robotPlace(msg))}</div>
+        <div class="place">${esc(robotPlace(msg))}</div>${health ? health.problems.map((p) => `<div class="health-problem">${esc(p)}</div>`).join("") : ""}
         ${waiting ? `<div class="wait-reason muted">${esc(HOLD_TEXT.wait)}</div>` : ""}
         ${stop ? `<div class="stop-reason">${esc(stop.reason ?? "현장 확인 필요")}</div>${resumeHtml(r.name, stop)}` : ""}
         <div class="meta">${meta.join(" · ")}</div>
         ${versionLine(msg)}
+        ${healthHtml(health)}
       </li>`;
     })
     .join("");
