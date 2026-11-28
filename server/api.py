@@ -544,6 +544,27 @@ def selfcheck():
         srv.sent.clear()
         srv.tick()
         assert not [m for _, m in srv.sent if m.get("cmd") == "patrol"], srv.sent
+        # ack 지연(2초)이 있는 로봇이 복귀해도 도크 길이 풀림 (#49: ack 대기 idle로 가는 중 기록이 지워지면 영구히 막힘)
+        from server.fake_robots import FakeRobot
+        now[0] += 100
+        srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, clock=lambda: now[0])
+        bot = FakeRobot("A", battery=100, rng=__import__("random").Random(5), clock=lambda: now[0], ack_s=2)
+        seen, docked = 0, False
+        for _ in range(400):
+            now[0] += 1
+            bot.tick(chance=0)
+            srv.on_mqtt("potent/A/state", protocol.pack(bot.state()))
+            srv.tick()
+            for t_, m_ in srv.sent[seen:]:
+                if t_ == "potent/A/cmd":
+                    bot.on_cmd(m_)
+            seen = len(srv.sent)
+            if bot.marker == 11 and srv.auto_start:              # 나간 뒤 배터리를 낮추고 자동 출발은 끔
+                srv.auto_start, bot.battery = False, 20
+            if not srv.auto_start and bot.marker == map_config.DOCK_MARKER and bot.status == "idle":
+                docked = True
+                break
+        assert docked and srv.traffic.can_depart() and "A" not in srv.traffic.intent, (bot.marker, srv.traffic.lanes)
         # 관리자 잠금: 비밀번호를 정하면 경보 닫기·출발·명령·모드는 맞는 헤더가 있어야 함
         srv = Server(photo_dir=Path(tmp) / "photos", mqtt=False, admin_password="pw1234", auto_start=False)
         with TestClient(create_app(srv)) as c:

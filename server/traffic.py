@@ -19,6 +19,7 @@ import logging
 
 from common import protocol
 from server import map_config, route
+from server.fleet import START_GRACE_S
 
 log = logging.getLogger("server.traffic")
 
@@ -49,6 +50,7 @@ class Traffic:
         self.reserved = {}  # 마커 → {"robot", "at"(예약 시각), "from"(예약할 때 있던 마커)}
         self.waiting = {}   # 로봇 → 기다리는 마커 (교통 정리로 wait을 보낸 로봇)
         self.lanes = {}     # 한 줄 길 번호 → 쓰는 로봇
+        self.sent_at = {}   # 로봇 → 걷기 명령을 마지막으로 보낸 시각 (Pi는 보드가 F에 ok 하기 전까지 idle로 보냄)
 
     # ---------- 상태 ----------
     def kind(self, robot):
@@ -138,6 +140,7 @@ class Traffic:
         log.info("%s 배터리 %s%% → 도크로", robot, s.get("battery"))
         self.lanes[DOCK_LANE] = robot
         self.intent[robot] = protocol.command("dock")
+        self.sent_at[robot] = self.clock()
         return [(robot, protocol.command("dock"))]
 
     # ---------- Server가 부르는 것 ----------
@@ -158,9 +161,11 @@ class Traffic:
                                                   # 미리 잡아 두었다가 충전 스테이션에 닿으면 풂)
         k = self.kind(robot)
         target = map_config.DOCK_MARKER if k == "dock" else self.intent.get(robot, {}).get("zone")
-        if k in ("dock", "go") and (moved and marker == target or status == "idle" and hold is None):
+        acked = self.clock() - self.sent_at.get(robot, -1e9) >= START_GRACE_S
+        if k in ("dock", "go") and (moved and marker == target or status == "idle" and hold is None and acked):
             # 도착했거나, Pi가 정지 이유 없이 idle(도착 · 다시 켜짐)을 보냄 → 더는 가는 중이 아님
-            # (교통 정리로 세운 로봇은 hold=wait이라 여기 안 옴)
+            # (교통 정리로 세운 로봇은 hold=wait이라 여기 안 옴. 명령을 보내고 START_GRACE_S 안의 idle은
+            #  보드가 F에 ok 하기 전이라 도착이 아님)
             self.intent.pop(robot, None)
             self.waiting.pop(robot, None)
             if marker in (map_config.DOCK_MARKER, None):
@@ -201,6 +206,8 @@ class Traffic:
         cmd = msg.get("cmd")
         if cmd in MOVES:
             self.intent[robot] = dict(msg)
+        if cmd in MOVES + ("resume",):
+            self.sent_at[robot] = self.clock()
         if own:
             return []
         self.waiting.pop(robot, None)
@@ -330,12 +337,26 @@ if __name__ == "__main__":
     assert "B" not in t.waiting and t.tick() == []
 
     # 6) 도크로 가다 Pi가 idle(정지 이유 없음)을 보내면 = 도착 · 다시 켜짐 → 가는 중 기록을 지움. hold=wait이면 그대로
+    #    단 명령을 보내고 START_GRACE_S 안의 idle은 보드가 F에 ok 하기 전이라 지우지 않음 (#49)
     t = fresh(); f.roles.update({"A": "A"})
     t.note_command("A", protocol.command("dock"))
+    f.update_state("A", {"marker": None, "status": "idle", "hold": None, "battery": 70}); t.on_state("A")
+    assert t.busy() == {"A"}                                   # ack 기다리는 중
+    now[0] += START_GRACE_S
     f.update_state("A", {"marker": None, "status": "idle", "hold": "wait", "battery": 70}); t.on_state("A")
     assert t.busy() == {"A"}
     f.update_state("A", {"marker": None, "status": "idle", "hold": None, "battery": 70}); t.on_state("A")
     assert t.busy() == set()
+    # 13에서 dock 직후 ack 기다리는 idle이 와도 12에서 15를 예약하고, 16에 닿으면 도크 길이 풀림
+    t = fresh(); f.roles.update({"A": "A"})
+    state(t, "A", 14, role="A", battery=10)
+    assert state(t, "A", 13, role="A", battery=10) == [("A", {"cmd": "dock"})]
+    now[0] += 1
+    state(t, "A", 13, role="A", battery=10, status="idle")
+    assert t.kind("A") == "dock"
+    state(t, "A", 12, role="A", battery=10, status="dock"); assert t.reserved[15]["robot"] == "A"
+    state(t, "A", 15, role="A", battery=10, status="dock")
+    state(t, "A", 16, role="A", battery=10, status="idle"); assert t.can_depart() and "A" not in t.intent
 
     # 7) 출발하려던 로봇이 충전 스테이션에서 멈추면(hold) 도크 길을 풂
     t = fresh(); f.roles.update({"A": "A"})

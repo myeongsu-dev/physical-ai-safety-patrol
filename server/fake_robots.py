@@ -29,8 +29,10 @@ HEAT_SEC = 8            # 과열 확인에 머무는 시간(초)
 
 
 class FakeRobot:
-    def __init__(self, name, battery=100.0, rng=None, clock=time.time):
+    def __init__(self, name, battery=100.0, rng=None, clock=time.time, ack_s=0.0):
         self.name, self.rng, self.clock = name, rng or random.Random(), clock
+        self.ack_s = ack_s      # 걷기 명령 뒤 보드가 F에 ok 할 때까지(초). 그동안 Pi처럼 idle로 보내고 서 있음
+        self.ack_until = 0.0
         self.battery = battery
         self.status = "idle"
         self.role = None
@@ -47,7 +49,8 @@ class FakeRobot:
 
     # ---------- 보낼 것 ----------
     def state(self):
-        return {"marker": self.marker, "status": self.status, "role": self.role,
+        status = "idle" if self.clock() < self.ack_until and self.status in MOVING else self.status
+        return {"marker": self.marker, "status": status, "role": self.role,
                 "battery": round(self.battery), "sonar_cm": round(self.sonar_cm, 1),
                 "temp_c": round(self.temp_c, 1), "hold": self.hold, "version": "fake"}
 
@@ -86,7 +89,9 @@ class FakeRobot:
             self.status, self.hold = "idle", "wait"
         elif cmd == "guide":
             self.status, self.hold = "guide", "guide"
-        self.next_marker = max(self.next_marker, now + MARKER_SEC)
+        if cmd in ("patrol", "resume", "go", "dock") and self.status in MOVING:
+            self.ack_until = now + self.ack_s
+        self.next_marker = max(self.next_marker, now + MARKER_SEC, self.ack_until)
 
     def on_mode(self, msg):
         mode = msg.get("mode")
@@ -226,6 +231,11 @@ def selfcheck():
     b.on_mode({"mode": "evacuate"}); b.on_cmd(protocol.command("guide", arrow="left"))
     assert b.status == "guide"
     b.on_mode({"mode": "normal"}); assert b.status == "idle"
+    # ack 지연: 걷기 명령 뒤 ack_s 동안은 idle · hold null로 보내고 제자리
+    g = FakeRobot("G", rng=random.Random(4), clock=lambda: now[0], ack_s=2)
+    g.on_cmd(protocol.command("patrol", role="A"))
+    assert g.state()["status"] == "idle" and g.state()["hold"] is None
+    now[0] += 2; assert g.state()["status"] == "patrol"
     # 이벤트가 나면 형식이 protocol과 맞는지
     c = FakeRobot("C", rng=random.Random(2), clock=lambda: now[0])
     c.on_cmd(protocol.command("patrol", role="B"))

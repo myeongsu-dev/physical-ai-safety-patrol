@@ -9,6 +9,7 @@ python -m pip install -q -r server/requirements.txt httpx
 python -m compileall -q server
 python -m server.map_config
 python -m server.route
+python -m server.traffic
 python -m server.fleet
 python -m server.events
 python -m server.dispatch
