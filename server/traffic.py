@@ -80,8 +80,8 @@ class Traffic:
             for other, m in self.cur.items():
                 if other != robot and m == marker:
                     return other
-            for other in self.cur:                 # 끊긴 로봇은 다음 마커까지 가서 서니 그 마커도 막음
-                if other != robot and not self.fleet.online(other) and self.next_marker(other) == marker:
+            for other in self.cur:                 # 현장에서 끊긴 로봇은 다음 마커까지 가서 서니 그 마커도 막음 (도크에서 끈 로봇은 아님)
+                if other != robot and self.fleet.lost(other) and self.next_marker(other) == marker:
                     return other
             r = self.reserved.get(marker)
             if r and r["robot"] != robot:
@@ -251,21 +251,25 @@ class Traffic:
 
     def rejoin(self, robot):
         """연결이 끊겨 섰다가 다시 붙은 로봇을 출발시켜도 되면 [(로봇, 명령)], 아니면 [].
-        다음 마커를 알면 그 마커가 비었을 때 예약하고 출발. 모르면(서버를 다시 켜 지난 마커를 모름)
-        이웃 마커가 모두 비었을 때만."""
+        배터리 확인 지점이면 복귀(dock)부터 판단한다. 다음 마커를 알면 그 마커가 비었을 때 예약하고 출발.
+        모르면(서버를 다시 켜 지난 마커를 모름) 이웃 마커가 모두 비었을 때 이웃을 모두 예약하고 출발
+        (다른 로봇이 그쪽으로 rejoin하지 못하게. 다음 마커를 찍으면 on_state가 풂)."""
         cur = self.cur.get(robot)
         if cur is None:
             return []
+        self._maybe_dock(robot, cur)                 # 확인 지점이고 배터리가 낮으면 intent를 dock으로 (도크 길도 잡음)
         nxt = self.next_marker(robot)
         if nxt is None:
-            from server.dispatch import edges
-            if any(self.blocked_by(robot, n) is not None for n in edges()[cur]):
+            near = route.edges()[cur]
+            if any(self.blocked_by(robot, n) is not None for n in near):
                 return []
+            for n in near:
+                self.reserved[n] = {"robot": robot, "at": self.clock(), "from": cur}
         elif self.blocked_by(robot, nxt) is not None:
             return []
         else:
             self._take(robot, nxt)
-        log.info("%s 다시 연결, 마커 %s에서 다음 %s 비었음 → 다시 출발", robot, cur, nxt)
+        log.info("%s 다시 연결, 마커 %s에서 다음 %s 비었음 → 다시 출발 (%s)", robot, cur, nxt, self.kind(robot))
         return [(robot, self._release_cmd(robot))]
 
     def reset(self):
@@ -438,6 +442,28 @@ if __name__ == "__main__":
     f.update_state("C", {"marker": 7, "status": "patrol", "battery": 80, "hold": None}); t.on_state("C")
     f.update_state("B", {"marker": 6, "status": "idle", "battery": 80, "hold": "server", "role": "B"}); t.on_state("B")
     assert t.rejoin("B") == []
+
+    # 도크에서 전원을 끈 로봇(16, 끊김)은 15를 막지 않음 (#50)
+    t = fresh(); f.roles.update({"A": "A", "B": "B"})
+    f.update_state("B", {"marker": 16, "status": "idle", "battery": 90, "hold": None}); t.on_state("B")
+    now[0] += 20
+    state(t, "A", 14, role="A", battery=10)
+    assert state(t, "A", 13, role="A", battery=10) == [("A", {"cmd": "dock"})]
+    assert state(t, "A", 12, role="A", battery=10, status="dock") == [] and t.reserved[15]["robot"] == "A"
+    # 서버 재시작 뒤 두 대 rejoin: 지난 마커를 모르는 B(6)가 이웃 2 · 5 · 7을 예약 → 2로 가려던 A(1)는 기다림 (#50)
+    t = fresh(); f.roles.update({"A": "A", "B": "B"})
+    f.update_state("B", {"marker": 6, "status": "idle", "battery": 80, "hold": "server", "role": "B"}); t.on_state("B")
+    f.update_state("A", {"marker": 1, "status": "idle", "battery": 80, "hold": "server", "role": "A"}); t.on_state("A")
+    assert t.next_marker("B") is None and t.next_marker("A") == 2
+    assert t.rejoin("B") == [("B", {"cmd": "resume"})] and {2, 5, 7} <= set(t.reserved)
+    assert t.rejoin("A") == []
+    state(t, "B", 7, role="B")                                           # B가 7을 찍으면 2 · 5 예약이 풀림
+    assert t.rejoin("A") == [("A", {"cmd": "resume"})]
+    # 확인 지점(A 13, 서쪽)에서 hold server로 섰다가 붙으면 배터리를 보고 dock (#50)
+    t = fresh(); f.roles.update({"A": "A"})
+    state(t, "A", 14, role="A", battery=80); state(t, "A", 13, role="A", battery=80)
+    f.update_state("A", {"marker": 13, "status": "idle", "battery": 10, "hold": "server", "role": "A"}); t.on_state("A")
+    assert t.rejoin("A") == [("A", {"cmd": "dock"})] and t.lanes[DOCK_LANE] == "A"
 
     # 9) 설정을 바꾸면 그대로 따름: 배터리 먼저로 바꾸면 순찰 중이어도 배터리 낮은 쪽이 먼저
     saved = map_config.TIE_BREAK

@@ -39,8 +39,8 @@ state 메시지의 online이 false면 연결 끊김 (ONLINE_SEC초 넘게 state 
 - 서버는 ONLINE_SEC(7초) 넘게 state가 없으면 끊김으로 보고, 그 로봇의 지금 · 다음 마커를 막고 역할을 비우지 않는다.
 - CALL_HUMAN_SEC(30초) 안에 다시 붙으면: 위치를 확인하고 길이 비면 한 대씩(RESUME_GAP_S 간격) resume.
 - 30초 넘게 끊기면 사람 호출: 대시보드에 {"kind": "link_alert", "robot", "marker", "stop_marker", "online", "active": true}.
-  이 로봇은 다시 붙어도 자동으로 출발시키지 않는다. 관리자가 가서 보고 POST /robots/…/cmd resume을 보내 hold가
-  풀리면 {"active": false}로 경보를 내린다. state 메시지에도 "call_human": true/false.
+  이 로봇은 다시 붙어도 자동으로 출발시키지 않는다 (Pi가 재부팅돼 hold null로 붙어도). 관리자가 가서 보고
+  POST /robots/…/cmd(resume 등)나 /patrol을 보내면 {"active": false}로 경보를 내린다. state 메시지에도 "call_human": true/false.
 | / | dashboard/ 폴더 (index.html이 생기면) |
 """
 import argparse
@@ -233,7 +233,7 @@ class Server:
         """CALL_HUMAN_SEC 넘게 끊긴 로봇은 사람 호출. 다시 붙어 사람이 resume해 hold가 풀리면 내림"""
         s = self.fleet.robots[robot]
         long_lost = self.fleet.lost(robot) and self.clock() - s["seen"] > CALL_HUMAN_SEC
-        need = long_lost or (robot in self.need_human and s.get("hold") == "server")
+        need = long_lost or robot in self.need_human   # 재부팅으로 hold가 풀려 붙어도 사람이 볼 때까지
         if need and robot not in self.alerts:
             nxt = self.traffic.next_marker(robot)
             self.alerts[robot] = {"kind": "link_alert", "robot": robot, "marker": s.get("marker"),
@@ -418,6 +418,7 @@ def create_app(server):
 
     @app.post("/robots/{robot}/patrol", dependencies=lock)
     def robot_patrol(robot: str, role: str):
+        server.need_human.discard(robot)     # 사람이 보고 직접 내보냄 → 사람 호출 해제
         try:
             with server.lock:
                 sent = server.send_all(server.fleet.assign(robot, role))
@@ -431,6 +432,7 @@ def create_app(server):
             msg = protocol.command(body.pop("cmd", ""), **body)
         except (ValueError, TypeError) as e:
             raise HTTPException(400, str(e))
+        server.need_human.discard(robot)     # 사람이 보고 직접 명령 → 사람 호출 해제
         return {"sent": server.send_all([(protocol.topic(robot, "cmd"), msg)])}
 
     @app.post("/mode", dependencies=lock)
@@ -666,8 +668,11 @@ def selfcheck():
         now[0] += RESUME_RETRY_S + RESUME_GAP_S; st("A", 11); st("B", 1, "idle", "server")
         srv.sent.clear(); srv.tick()
         assert not [m for _, m in srv.sent if m.get("cmd") == "resume"] and "B" in srv.alerts
-        # 관리자가 가서 보고 resume → hold 풀림 → 경보 내림
-        srv.publish("potent/B/cmd", protocol.command("resume"))
+        # Pi가 재부팅돼 hold null로 붙어도 경보 유지 (#50)
+        st("B", None, "idle", None); srv.tick()
+        assert "B" in srv.alerts
+        # 관리자가 가서 보고 화면에서 resume → 경보 내림
+        assert TestClient(create_app(srv)).post("/robots/B/cmd", json={"cmd": "resume"}).status_code == 200
         st("B", 1, "patrol"); srv.tick()
         assert "B" not in srv.alerts and "B" not in srv.need_human
         # 끊긴 로봇에 보낸 명령은 예약을 지우지 않음
