@@ -50,9 +50,17 @@ ROUTES = {
 
 # ---------- 충전 복귀 ----------
 # 도크 = 관리실: 로봇이 스스로 오면 사람이 충전하고, 배터리가 BATTERY_START 이상 차면 서버가 자동으로 다시 내보낸다.
-RETURN_POINT = {
+RETURN_POINT = {                      # 도크 쪽으로 꺾는 곳 (대시보드 mapdata.js RETURN_POINT와 같게)
     "A": {"marker": 12, "heading": "W"},
     "B": {"marker": 7, "heading": "W"},   # B는 7을 동쪽·북쪽으로도 지나가므로 서쪽일 때만
+}
+# 배터리를 확인해 복귀할지 정하는 곳: 꺾는 곳 한 마커 앞 (팀 결정 11/27).
+# 여기서 BATTERY_RETURN 이하면 서버가 dock을 보내고 도크 길을 잡는다. 로봇은 다음 마커(12 · 7)에서 도크 쪽으로 꺾는다.
+#   A: 16-15-12-11-10-5-1-2-3-4-9-14-13(확인)-12(꺾음)
+#   B: 16-15-12-7-6-5-1-2-6-7-8-3-4-9-8(확인, 9에서 서쪽으로 올 때)-7(꺾음)
+BATTERY_CHECK = {
+    "A": {"marker": 13, "heading": "W"},
+    "B": {"marker": 8, "heading": "W"},   # B는 8을 동쪽(7 → 8)으로도 지나가므로 서쪽일 때만
 }
 BATTERY_RETURN = 25        # 복귀 지점에서 이 값 이하면 도크로 (대시보드 BATTERY_RETURN과 같게)
 BATTERY_START = 60         # 도크에서 이 값 이상이면 서버가 자동 출발 (임시, 실제 배터리 보고 조정)
@@ -117,6 +125,9 @@ if __name__ == "__main__":
     assert turn("B", 7, "E", 10) == "straight" and turn("B", 7, "W", 20) == "left" and turn("B", 7, "W", 80) == "straight"
     assert turn("B", 1, "N") == "follow" and turn("B", 7, "N") == "left"
     assert all(e in MARKERS for e in EXITS) and DOCK_MARKER not in EXITS
+    for r in ROUTES:   # 확인 지점 다음 마커가 꺾는 곳
+        loop, c = ROUTES[r]["loop"], BATTERY_CHECK[r]["marker"]
+        assert loop[(len(loop) - 1 - loop[::-1].index(c) + 1) % len(loop)] == RETURN_POINT[r]["marker"], r
     assert set(PRIORITY) <= {"dock", "go", "patrol"} and set(TIE_BREAK) <= {"priority", "battery", "name"}
     assert all(m in MARKERS for lane in SINGLE_LANES for m in lane) and any(DOCK_MARKER in lane for lane in SINGLE_LANES)
     print("map_config OK: 마커", len(MARKERS), "개, A 고리", len(ROUTES["A"]["loop"]), "· B 고리", len(ROUTES["B"]["loop"]))

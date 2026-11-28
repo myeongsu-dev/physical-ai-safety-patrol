@@ -13,9 +13,16 @@ TODO: 상태(대기·순찰·막힘 정지·과열 확인·출동·대피 안내
 import time
 
 from common import protocol  # 메시지 이름·형식은 여기서만 가져온다
-from server import map_config
+from server import map_config, route
 
-ONLINE_SEC = 5          # 이 시간 안에 state가 온 로봇만 출발 대상
+# 연결 끊김 (#39): 로봇은 서버 신호(ALIVE_TOPIC, 1초마다)가 ROBOT_LOST_S 안 오면 다음 마커까지 가서 멈춘다 (hold "server").
+# 서버는 그보다 늦은 ONLINE_SEC에 끊김으로 본다. 서버가 막을 때 로봇은 이미 서 있게, 로봇이 항상 먼저.
+# CALL_HUMAN_SEC 넘게 끊기면 스스로 복구가 안 되는 상황으로 보고 관리자 화면에 사람 호출 경보.
+ALIVE_TOPIC = getattr(protocol, "ALIVE_TOPIC", protocol.ROOT + "/server/alive")
+ROBOT_LOST_S = 5        # 로봇 쪽 (edge · 가짜 로봇). 서버는 쓰지 않고 맞춰 두기만 함
+ONLINE_SEC = 7          # 이 시간 안에 state가 온 로봇만 연결된 것으로 봄 (ROBOT_LOST_S보다 길게)
+CALL_HUMAN_SEC = 30     # 이만큼 넘게 끊기면 사람 호출, 다시 붙어도 자동으로 출발시키지 않음
+STOPPED = ("wait", "server")   # 서버가 세운 것 (교통 정리 · 교차 확인 wait, 연결 끊김 server). 역할은 그대로
 ON_DUTY = ("patrol",)   # 이 상태면 이미 역할을 맡아 순찰 중
 START_GRACE_S = 15      # patrol을 보낸 뒤 이 시간 동안은 순찰 중으로 친다 (보드 응답 기다리는 동안 또 보내지 않게)
 
@@ -35,13 +42,13 @@ class Fleet:
         prev = self.robots.get(robot, {}).get("marker")
         new = msg.get("marker")
         if prev in map_config.MARKERS and new in map_config.MARKERS and prev != new:
-            from server.dispatch import compass
-            self.heading[robot] = compass(prev, new)
+            self.heading[robot] = route.compass(prev, new)
         if new in map_config.MARKERS:
             self.saw_marker.add(robot)
         self.robots[robot] = {**msg, "seen": self.clock()}
         role = msg.get("role")        # 서버를 다시 켰을 때: 순찰 중인 로봇이 알려 주는 역할로 복구
-        if role in protocol.ROLES and msg.get("status") in ON_DUTY and role not in self.roles:
+        out = msg.get("status") in ON_DUTY or msg.get("hold") in STOPPED   # 끊겨서 선 로봇도 역할을 맡은 채
+        if role in protocol.ROLES and out and role not in self.roles:
             self.roles[role] = robot
 
     def online(self, robot):
@@ -54,7 +61,7 @@ class Fleet:
             return False
         status = self.robots[robot].get("status")
         waiting = status == "idle" and self.clock() - self.started.get(robot, -1e9) < START_GRACE_S
-        held = status == "idle" and self.robots[robot].get("hold") == "wait"   # 서버가 잠깐 세운 것 (교통 정리 · 교차 확인)
+        held = status == "idle" and self.robots[robot].get("hold") in STOPPED   # 서버가 세운 것 · 연결이 끊겨 선 것
         return status in ON_DUTY or waiting or held   # Pi는 보드가 F에 답하기 전까지 idle로 보낸다
 
     def at_dock(self, robot):
@@ -64,6 +71,15 @@ class Fleet:
         if marker is None:
             return robot not in self.saw_marker
         return marker == map_config.DOCK_MARKER
+
+    def in_field(self, robot):
+        """현장에 나가 있나 (도크에서 쉬는 중이 아님)"""
+        s = self.robots.get(robot)
+        return bool(s) and not (s.get("status") in ("idle", "dock") and self.at_dock(robot))
+
+    def lost(self, robot):
+        """현장에 나가 있다가 연결이 끊긴 로봇. 역할을 비우지 않고 위치를 막아 둔다"""
+        return robot in self.robots and not self.online(robot) and self.in_field(robot)
 
     def role_of(self, robot):
         return next((role for role, name in self.roles.items() if name == robot), None)
@@ -92,7 +108,7 @@ class Fleet:
         auto=False (POST /fleet/start): 연결된 로봇 중 배터리가 BATTERY_RETURN 초과면 내보냄
         auto=True (서버가 1초마다): 도크에서 쉬고(idle · dock) 배터리 BATTERY_START 이상인 로봇만
         exclude: 내보내면 안 되는 로봇 (과열 확인 중), limit: 한 번에 내보낼 최대 대수 (도크 길은 한 대씩이라 1)"""
-        busy = {name for name in self.roles.values() if self.on_duty(name)}
+        busy = {name for name in self.roles.values() if self.on_duty(name) or self.lost(name)}   # 끊긴 로봇 역할도 안 비움
         free_roles = [r for r in protocol.ROLES if self.roles.get(r) not in busy]
         if not free_roles:
             return []
@@ -188,4 +204,20 @@ if __name__ == "__main__":
     j.update_state("B", {"status": "patrol", "battery": 90, "marker": 6, "hold": None})
     j.update_state("B", {"status": "idle", "battery": 90, "marker": None, "hold": None})
     assert not j.at_dock("B") and j.auto_assign(auto=True) == []
+    # 연결 끊김 (#39): 현장에서 끊긴 로봇의 역할은 비우지 않음. 도크에서 쉬다 끊긴 로봇은 상관없음
+    m = Fleet(clock=lambda: now[0])
+    m.update_state("A", {"status": "idle", "battery": 90, "marker": 16, "hold": None})
+    assert m.auto_assign(auto=True, limit=1) == [("potent/A/cmd", {"cmd": "patrol", "role": "A"})]
+    m.update_state("A", {"status": "patrol", "battery": 88, "marker": 11, "hold": None, "role": "A"})
+    now[0] += ONLINE_SEC + 1
+    m.update_state("C", {"status": "idle", "battery": 95, "marker": 16, "hold": None})
+    assert m.lost("A") and not m.lost("C")
+    assert m.auto_assign(auto=True) == [("potent/C/cmd", {"cmd": "patrol", "role": "B"})]   # A 역할은 그대로
+    # 다시 붙어 hold server로 서 있어도 역할을 맡은 채 (서버가 resume할 때까지)
+    m.update_state("A", {"status": "idle", "battery": 88, "marker": 10, "hold": "server", "role": "A"})
+    assert m.on_duty("A") and m.role_of("A") == "A"
+    # 서버를 다시 켰을 때 hold server로 선 로봇도 역할 복구
+    n = Fleet(clock=lambda: now[0])
+    n.update_state("B", {"status": "idle", "battery": 70, "marker": 7, "hold": "server", "role": "B"})
+    assert n.roles == {"B": "B"}
     print("fleet ok: 역할", f.roles)

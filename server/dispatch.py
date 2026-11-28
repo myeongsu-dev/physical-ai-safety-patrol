@@ -4,7 +4,7 @@
 경로의 첫 걸음 방향(N·E·S·W)이 그 마커의 화살표다. 길이 끊긴 마커와 불난 마커는 x.
   - 대시보드: plan()을 그대로 받아 지도에 그린다 ({"marker", "dir", "exit", "path"})
   - 로봇: 지금 마커의 방향을 로봇이 보는 방향 기준으로 바꿔 guide(arrow=left·right·up·down·x)로 보낸다
-길(연결)은 map_config.ROUTES의 마커 순서에서, 방향과 거리는 MARKERS의 지도 좌표에서 계산한다.
+길(연결) · 방향 · 거리는 route.py (map_config.ROUTES의 마커 순서와 MARKERS 좌표)에서 계산한다.
 셀프 체크: python -m server.dispatch
 
 TODO: 충전 교대(배터리 BATTERY_RETURN 이하면 대기 로봇에 구간 인계), 출동 로봇을 경로 거리로 고르기,
@@ -14,7 +14,7 @@ import heapq
 import math
 
 from common import protocol  # noqa: F401  (메시지 이름·형식은 여기서만 가져온다)
-from server import map_config
+from server import map_config, route
 
 COMPASS = ("N", "E", "S", "W")
 # 로봇 기준 화살표: 로봇이 보는 방향과 같으면 up, 시계 방향 90도면 right ...
@@ -22,36 +22,8 @@ RELATIVE = {0: "up", 1: "right", 2: "down", 3: "left"}
 ROBOT_ARROWS = ("left", "right", "up", "x")   # 지금 펌웨어(firmware/dog/main.py ARROWS)가 아는 것. down이 생기면 더함
 
 
-def edges():
-    """마커 → 이웃 마커 집합. ROUTES의 entry · loop(한 바퀴) · back을 이은 것 (양방향)"""
-    nb = {m: set() for m in map_config.MARKERS}
-
-    def link(seq):
-        for a, b in zip(seq, seq[1:]):
-            if a != b:
-                nb[a].add(b)
-                nb[b].add(a)
-    for r in map_config.ROUTES.values():
-        loop = r["loop"]
-        link(r["entry"] + loop[:1])              # 도크에서 나와 고리 첫 마커로
-        link(loop + loop[:1])                    # 고리 한 바퀴
-        ret = map_config.RETURN_POINT[next(k for k, v in map_config.ROUTES.items() if v is r)]["marker"]
-        link([ret] + r["back"])                  # 복귀 지점에서 도크로
-    return nb
-
-
-def compass(a, b):
-    """마커 a에서 b로 가는 방향 (지도 위쪽이 N, 픽셀 y는 아래로 커짐)"""
-    (x1, y1), (x2, y2) = map_config.MARKERS[a]["xy"], map_config.MARKERS[b]["xy"]
-    dx, dy = x2 - x1, y2 - y1
-    if abs(dx) >= abs(dy):
-        return "E" if dx > 0 else "W"
-    return "S" if dy > 0 else "N"
-
-
-def _dist(a, b):
-    (x1, y1), (x2, y2) = map_config.MARKERS[a]["xy"], map_config.MARKERS[b]["xy"]
-    return math.hypot(x2 - x1, y2 - y1)
+# 길 · 방향 · 거리는 route.py와 같은 것을 쓴다 (서버 · Pi가 같은 계산)
+edges, compass, _dist = route.edges, route.compass, route.dist
 
 
 def plan(fire=None, exits=None):
