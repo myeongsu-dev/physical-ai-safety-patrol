@@ -374,6 +374,15 @@ ul { list-style: none; margin: 0; padding: 0; }
 .robot-cards .version { margin-top: 2px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .robot-cards .battery.low { color: var(--warn); font-weight: 600; }
 .robot-cards .battery.empty { color: var(--bad); font-weight: 600; }
+/* ---------- 로봇 상태 (health, 이슈 #54): 문제 있으면 카드 왼쪽 주황 줄과 한 줄 문구 ---------- */
+/* 테두리 대신 안쪽 그림자: 테마가 카드 테두리를 없애도 보이게 */
+.robot-cards li.health-bad { box-shadow: inset 4px 0 0 var(--warn); }
+.robot-cards .health-problem { font-size: 13px; color: var(--warn); font-weight: 600; }
+.robot-cards .health-pi { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.robot-cards .health-notyet { font-size: 12px; color: var(--muted); }
+.robot-cards .health-pi > span, .robot-cards .health-notyet > span { white-space: nowrap; }
+.robot-cards .health-links { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 2px; font-size: 12px; }
+.robot-cards .health-links a { color: var(--text); }
 
 /* ---------- 최근 경보 ---------- */
 .alerts li {

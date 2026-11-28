@@ -117,6 +117,21 @@ class FakeRobot {
     this.sonar = 120;
     this.temp = 24;
     this.hold = null;       // 멈춘 이유 (stop · wait · line ...), 없으면 null
+    this.fault = {};        // 로봇 상태 시험용 고장: { board, cam, undervolt } (fake.healthBad)
+  }
+
+  // edge/health.py와 같은 모양. 지금 로봇처럼 AI 모델 · 온도 센서는 없음(false)
+  health() {
+    const f = this.fault;
+    return {
+      board: { ok: !f.board, version: "fake", age_s: f.board ? 5.2 : 0.1, line: 80, sonar_cm: Math.round(this.sonar * 10) / 10, error: f.board ? "no reply" : null },
+      cam: { ok: !f.cam, fps: f.cam ? 0 : 14, age_s: f.cam ? 6.1 : 0.04 },
+      model: { ready: false, version: null },
+      thermo: { ok: false },
+      pi: { cpu_temp_c: 46.9, cpu_pct: 23, mem_pct: 41, undervolt: !!f.undervolt, throttled: false },
+      web: "http://127.0.0.1:8080",
+      floor_web: null,
+    };
   }
 
   state() {
@@ -129,6 +144,7 @@ class FakeRobot {
       temp_c: Math.round(this.temp * 10) / 10,
       version: "fake",
       hold: this.hold, // 멈춘 이유, 없으면 null (server/fake_robots.py · edge/agent.py와 같게)
+      health: this.health(),
     };
   }
 
@@ -399,6 +415,21 @@ export class FakeServer {
     const r = this.robots[name];
     if (!r) return;
     r.resume();
+    this._push(this._stateMsg(r));
+  }
+
+  // 로봇 상태 고장 흉내 (콘솔 fake.healthBad("A", "cam")). part: board · cam · undervolt. healthOk로 되돌림
+  healthBad(name, part) {
+    const r = this.robots[name] || this._pickRobot();
+    r.fault[part] = true;
+    this._push(this._stateMsg(r));
+    return r.name;
+  }
+
+  healthOk(name) {
+    const r = this.robots[name];
+    if (!r) return;
+    r.fault = {};
     this._push(this._stateMsg(r));
   }
 
