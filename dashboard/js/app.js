@@ -170,10 +170,12 @@ function renderKpis(s, serverOpen, now) {
   kpiKey = key;
   document.getElementById("kpis").innerHTML = tiles.map((t) => {
     const cls = ["kpi", t.type ? "" : "robot-tile", t.tone, t.last ? "group-end" : ""].filter(Boolean).join(" ");
+    // data-k: 칸마다 아이콘 (theme.css. 다크 모드에서 보임)
+    const k = t.type ?? { "순찰 중": "patrol", "충전 스테이션": "dock", "확인 필요": "check" }[t.label];
     const inner = `<span class="kpi-label">${esc(t.label)}</span><b>${serverOpen ? t.n : "-"}</b><span class="kpi-unit">${t.unit}</span>`;
     return t.type && serverOpen && t.n > 0
-      ? `<button type="button" class="${cls} kpi-btn" data-kpi="${t.type}" title="눌러서 경보 보기">${inner}</button>`
-      : `<div class="${cls}">${inner}</div>`;
+      ? `<button type="button" class="${cls} kpi-btn" data-k="${k}" data-kpi="${t.type}" title="눌러서 경보 보기">${inner}</button>`
+      : `<div class="${cls}" data-k="${k}">${inner}</div>`;
   }).join("");
 }
 
@@ -824,6 +826,35 @@ function setSoundButton(b, text, on) {
   b.title = text;
   b.className = "icon-btn sound-btn" + (on ? "" : " off");
 }
+// 다크 모드: html에 data-theme="dark"를 붙이면 theme.css의 다크 색이 쓰인다. 고른 것은 이 브라우저에 기억
+// (index.html 머리의 짧은 스크립트가 화면을 그리기 전에 먼저 켠다)
+const THEME_KEY = "dash-theme";
+const MOON = '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>';
+const SUN = '<circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>';
+function savedTheme() {
+  try { return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light"; } catch { return "light"; }
+}
+let theme = savedTheme();
+function renderTheme() {
+  const root = document.documentElement;
+  if (root) {
+    if (theme === "dark") root.dataset.theme = "dark";
+    else delete root.dataset.theme;
+  }
+  const b = document.getElementById("theme");
+  const text = theme === "dark" ? "밝은 화면으로" : "다크 모드";
+  b.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">${theme === "dark" ? SUN : MOON}</svg><span class="sr-only">${text}</span>`;
+  b.title = text;
+  b.setAttribute("aria-label", text);
+  b.setAttribute("aria-pressed", String(theme === "dark"));
+}
+function toggleTheme() {
+  theme = theme === "dark" ? "light" : "dark";
+  try { localStorage.setItem(THEME_KEY, theme); } catch { /* 저장이 막혀 있으면 이번 화면에서만 */ }
+  renderTheme();
+}
+renderTheme();
+
 function renderSoundButton() {
   const b = document.getElementById("sound");
   if (!alarm.supported) {
@@ -887,7 +918,7 @@ function closeViewer() {
 
 function onClick(ev) {
   const t = ev.target.closest?.(
-    "[data-alert], [data-check], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel], [data-evac-mute], [data-photo], [data-viewer-close], [data-more], [data-past-retry], [data-hpage], [data-htype], [data-mpage], [data-kpi], [data-pick], [data-tab], [data-resume], [data-fire], [data-fire-cancel]",
+    "[data-alert], [data-check], [data-popup-close], [data-sound], [data-evac], [data-evac-cancel], [data-evac-mute], [data-photo], [data-viewer-close], [data-more], [data-past-retry], [data-hpage], [data-htype], [data-mpage], [data-kpi], [data-pick], [data-tab], [data-resume], [data-fire], [data-fire-cancel], [data-theme-toggle]",
   );
   // 경보 칸 목록 밖을 누르면 목록을 닫는다
   if (!t?.dataset.kpi && !ev.target.closest?.("#kpi-pick")) closePick();
@@ -937,6 +968,8 @@ function onClick(ev) {
   } else if (t.dataset.evacMute) {
     evacAlarm.ringing = false;
     render();
+  } else if (t.dataset.themeToggle) {
+    toggleTheme();
   } else if (t.dataset.sound) {
     if (alarm.enabled) {
       alarm.disable();

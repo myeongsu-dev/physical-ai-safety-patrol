@@ -1,0 +1,284 @@
+/* 화면 테마. 기본(밝은 화면)은 IBM Carbon 시안(디자인 시안 3), 다크 모드는 어두운 남색 관제실 시안(시안 1).
+   위 막대의 달 · 해 버튼으로 바꾸고, 고른 것은 이 브라우저에 기억한다 (html의 data-theme="dark").
+   app.css 뒤에 읽는다. 글꼴은 인터넷이 안 되면 기본 글꼴로 나온다 */
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;400;600&family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+KR:wght@400;500;700&display=swap");
+
+/* 지도 색 · 아이콘을 테마가 바꿀 수 있게 이어 주는 곳. 변수가 없으면 원래 색 그대로 */
+
+/* ---------- 지도 색 (map.js가 SVG 속성으로 넣은 색을 CSS 변수로) ---------- */
+svg [fill="#08111f"] { fill: var(--map-bg, #08111f); }
+svg [fill="#0b1729"] { fill: var(--map-floor, #0b1729); }
+svg [stroke="#13233a"] { stroke: var(--map-grid, #13233a); }
+svg [stroke="#9fb2c8"] { stroke: var(--map-wall, #9fb2c8); }
+svg [stroke="#5b6f88"] { stroke: var(--map-wall2, #5b6f88); }
+svg [fill="#11213a"] { fill: var(--map-rack, #11213a); }
+svg [stroke="#34506f"] { stroke: var(--map-rack-line, #34506f); }
+svg text[fill="#c9daf0"] { fill: var(--map-rack-text, #c9daf0); }
+svg [stroke="#dfe9f5"] { stroke: var(--map-path, #dfe9f5); filter: var(--map-path-glow, url(#map-glow)); }
+svg [fill="#0b1626"] { fill: var(--map-marker, #0b1626); }
+svg rect[stroke="#f5c542"] { stroke: var(--map-marker-line, #f5c542); }
+svg text[fill="#fff"] { fill: var(--map-marker-text, #fff); }
+svg [fill="#0d1a2c"] { fill: var(--map-pill, #0d1a2c); }
+svg text[fill="#dbe7f5"] { fill: var(--map-pill-text, #dbe7f5); }
+svg [fill="#062033"] { fill: var(--map-robot, #062033); }
+svg .robot text { fill: var(--map-robot-text, #fff); }
+.map-panel { background: var(--map-bg, #08111f); }
+
+/* ---------- 제목 옆 표시와 영어 부제 (테마가 켤 때만) ---------- */
+.brand-mark, .brand-sub { display: none; }
+
+/* ---------- 아이콘 (테마가 .kpi::before 등에서 mask로 씀) ---------- */
+.kpi[data-k="patrol"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M8 12.5l2.5 2.5L16 9.5'/%3E%3C/svg%3E"); }
+.kpi[data-k="dock"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 2L4 14h7l-1 8 9-12h-7z'/%3E%3C/svg%3E"); }
+.kpi[data-k="check"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-4-4'/%3E%3C/svg%3E"); }
+.kpi[data-k="obstacle"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M5.6 5.6l12.8 12.8'/%3E%3C/svg%3E"); }
+.kpi[data-k="floor_object"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3L2 20h20z'/%3E%3Cpath d='M12 10v4M12 17v.5'/%3E%3C/svg%3E"); }
+.kpi[data-k="heat"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 14.8V4a2 2 0 0 0-4 0v10.8a4 4 0 1 0 4 0z'/%3E%3C/svg%3E"); }
+.kpi[data-k="flame"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 22c4 0 7-2.7 7-6.5 0-3-2-5.5-3.5-7-.4 2-1.5 3-2.5 3 .5-3-1-6-4-8.5.3 3.5-4 6-4 11.5C5 19.3 8 22 12 22z'/%3E%3C/svg%3E"); }
+.tab[data-tab="live"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z'/%3E%3C/svg%3E"); }
+.tab[data-tab="records"] { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 6h11M9 12h11M9 18h11M4 6h.5M4 12h.5M4 18h.5'/%3E%3C/svg%3E"); }
+.brand-mark { --icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z'/%3E%3Cpath d='M8.5 12l2.5 2.5 4.5-5'/%3E%3C/svg%3E"); }
+
+/* 로봇 표시 테두리 (연결 · 끊김 · 멈춤) */
+svg .robot [stroke="#3ee0ff"] { stroke: var(--map-robot-line, #3ee0ff); }
+svg [stroke="#eafff1"] { stroke: var(--map-exit-text, #eafff1); }
+svg text[fill="#eafff1"] { fill: var(--map-exit-text, #eafff1); }
+/* 비상구 빗금 */
+svg [fill="#0f3a24"] { fill: var(--map-exit-a, #0f3a24); }
+svg [stroke="#1f7a45"] { stroke: var(--map-exit-b, #1f7a45); }
+
+/* ==================== 기본: IBM Carbon (시안 3) ==================== */
+html:not([data-theme="dark"]) {
+  --bg: #f4f4f4;
+  --panel: #ffffff;
+  --text: #161616;
+  --muted: #525252;
+  --line: #e0e0e0;
+  --ok: #24a148;
+  --bad: #da1e28;
+  --bad-bg: #fff1f1;
+  --warn: #8e6a00;
+  --warn-bg: #fcf4d6;
+  --radius: 0px;
+  --accent: #0f62fe;
+  --map-bg: #f4f4f4;
+  --map-floor: #ffffff;
+  --map-grid: #f0f0f0;
+  --map-wall: #161616;
+  --map-wall2: #c6c6c6;
+  --map-rack: #e0e0e0;
+  --map-rack-line: #c6c6c6;
+  --map-rack-text: #393939;
+  --map-path: #0f62fe;
+  --map-path-glow: none;
+  --map-marker: #ffffff;
+  --map-marker-line: #161616;
+  --map-marker-text: #161616;
+  --map-pill: #ffffff;
+  --map-pill-text: #161616;
+  --map-robot: #161616;
+  --map-robot-text: #ffffff;
+  --map-robot-line: #0f62fe;
+  --map-exit-a: #defbe6;
+  --map-exit-b: #a7f0ba;
+  --map-exit-text: #044317;
+}
+html:not([data-theme="dark"]) body { font-family: "IBM Plex Sans KR", "IBM Plex Sans", system-ui, sans-serif; }
+html:not([data-theme="dark"]) b, html:not([data-theme="dark"]) .kpi b, html:not([data-theme="dark"]) #time, html:not([data-theme="dark"]) .clock { font-family: "IBM Plex Mono", monospace; }
+/* Carbon UI shell: 검은 위 막대 */
+html:not([data-theme="dark"]) .bar { background: #161616; color: #f4f4f4; border-bottom: 0; padding: 0 0 0 16px; min-height: 48px; }
+html:not([data-theme="dark"]) h1 { font-size: 14px; font-weight: 400; letter-spacing: 0.01em; }
+html:not([data-theme="dark"]) h1 .brand-title::after { content: " / MechDog"; color: #8d8d8d; }
+html:not([data-theme="dark"]) .view-name { border-color: #8d8d8d; color: #f4f4f4; font-weight: 400; }
+html:not([data-theme="dark"]) .conn { gap: 0; }
+html:not([data-theme="dark"]) .conn > * { padding: 0 16px; border-left: 1px solid #393939; min-height: 48px; display: flex; align-items: center; }
+html:not([data-theme="dark"]) .conn-item .label { color: #c6c6c6; }
+html:not([data-theme="dark"]) .conn-item .value { color: #f4f4f4; }
+html:not([data-theme="dark"]) .sound-btn, html:not([data-theme="dark"]) .bar-btn { border: 0; border-radius: 0; background: transparent; color: #f4f4f4; font-weight: 400; }
+html:not([data-theme="dark"]) .sound-btn.off { background: transparent; color: #f1c21b; }
+html:not([data-theme="dark"]) .bar-btn:hover, html:not([data-theme="dark"]) .sound-btn:hover { background: #393939; }
+html:not([data-theme="dark"]) .clock { color: #c6c6c6; }
+html:not([data-theme="dark"]) .clock #time { color: #f4f4f4; }
+/* Carbon side nav */
+html:not([data-theme="dark"]) .tabs { background: #ffffff; border-right: 1px solid var(--line); padding: 16px 0; gap: 0; }
+html:not([data-theme="dark"]) .tab { border-radius: 0; padding: 12px 16px; color: var(--muted); font-weight: 400; }
+html:not([data-theme="dark"]) .tab:hover { background: #e8e8e8; color: var(--text); }
+html:not([data-theme="dark"]) .tab.on { background: #e0e0e0; color: var(--text); font-weight: 600; box-shadow: inset 3px 0 0 var(--accent); }
+html:not([data-theme="dark"]) .badge { border-radius: 0; background: var(--bad); }
+/* 칸: 그림자 없이 회색 층 */
+html:not([data-theme="dark"]) .layout { gap: 1px 16px; }
+html:not([data-theme="dark"]) .kpis { gap: 1px; background: var(--line); }
+html:not([data-theme="dark"]) .kpi { border: 0; border-radius: 0; border-left: 0; border-bottom: 3px solid transparent; padding: 12px 16px; }
+html:not([data-theme="dark"]) .kpi.group-end { margin-right: 16px; }
+html:not([data-theme="dark"]) .kpi-label { font-size: 12px; letter-spacing: 0.32px; }
+html:not([data-theme="dark"]) .kpi b { font-size: 24px; font-weight: 400; }
+html:not([data-theme="dark"]) .kpi.ok { border-bottom-color: var(--ok); }
+html:not([data-theme="dark"]) .kpi.warn { border-bottom-color: #f1c21b; }
+html:not([data-theme="dark"]) .kpi.bad { border-bottom-color: var(--bad); }
+html:not([data-theme="dark"]) .panel, html:not([data-theme="dark"]) .map-panel { border: 0; border-radius: 0; }
+html:not([data-theme="dark"]) h2 { font-size: 16px; font-weight: 400; }
+html:not([data-theme="dark"]) .map-panel { color: var(--text); }
+html:not([data-theme="dark"]) .map-panel h2 { background: #ffffff; border-bottom: 1px solid var(--line); color: var(--text); font-size: 16px; font-weight: 400; }
+html:not([data-theme="dark"]) .legend { background: #ffffff; border-top: 1px solid var(--line); color: var(--muted); }
+html:not([data-theme="dark"]) .level { border-radius: 0; font-weight: 600; }
+html:not([data-theme="dark"]) .robot-cards li { border-radius: 0; border: 0; background: #f4f4f4; }
+html:not([data-theme="dark"]) .robot-cards li.stopped { background: var(--warn-bg); box-shadow: inset 3px 0 0 #f1c21b; }
+html:not([data-theme="dark"]) .robot-cards li.bad { box-shadow: inset 3px 0 0 var(--bad); }
+html:not([data-theme="dark"]) .alert-btn:hover { background: #e8e8e8; }
+/* 버튼: 사각 파랑 */
+html:not([data-theme="dark"]) .popup { border-radius: 0; border-top-width: 3px; }
+html:not([data-theme="dark"]) .photo.none { border-radius: 0; }
+html:not([data-theme="dark"]) .check, html:not([data-theme="dark"]) .popup .check { background: var(--accent); border-color: var(--accent); border-radius: 0; font-weight: 400; text-align: left; }
+html:not([data-theme="dark"]) .check-row .check.false-alarm { background: #393939; border-color: #393939; color: #fff; }
+html:not([data-theme="dark"]) .popup-close { border-radius: 0; border: 0; background: transparent; color: var(--accent); text-align: left; }
+html:not([data-theme="dark"]) .kpi-pick { border-radius: 0; border-color: var(--line); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3); }
+html:not([data-theme="dark"]) .login { border-radius: 0; border-top-color: var(--accent); }
+html:not([data-theme="dark"]) .login input { border: 0; border-bottom: 1px solid #8d8d8d; background: #f4f4f4; border-radius: 0; }
+html:not([data-theme="dark"]) .login-btn { border-radius: 0; background: var(--accent); border-color: var(--accent); }
+/* 로봇 칸 · 경보 칸 사이에 회색 바탕이 비치지 않게 */
+html:not([data-theme="dark"]) .kpis { background: transparent; gap: 2px; }
+
+/* ==================== 다크 모드: 어두운 남색 관제실 (시안 1) ==================== */
+html[data-theme="dark"] {
+  --bg: #0a1120;
+  --panel: #0f1a2e;
+  --text: #e6eefb;
+  --muted: #8fa3c0;
+  --line: #1f3557;
+  --ok: #34d399;
+  --bad: #ff5a6a;
+  --bad-bg: rgba(255, 90, 106, 0.12);
+  --warn: #fbbf24;
+  --warn-bg: rgba(251, 191, 36, 0.1);
+  --radius: 10px;
+  --accent: #38bdf8;
+  --glow: 0 0 0 1px rgba(56, 189, 248, 0.08), 0 8px 24px rgba(0, 0, 0, 0.35);
+  /* 지도는 원래 어두운 화면 그대로, 테두리만 조금 더 밝게 */
+  --map-bg: #0b1426;
+  --map-floor: #0e1a30;
+}
+html[data-theme="dark"] body {
+  background: radial-gradient(1200px 600px at 20% -10%, #13284a 0%, transparent 60%), var(--bg);
+  font-family: "Noto Sans KR", system-ui, sans-serif;
+}
+/* 위 막대 */
+html[data-theme="dark"] .bar { background: #0b1527; border-bottom: 1px solid var(--line); padding: 12px 20px; }
+html[data-theme="dark"] h1 { display: flex; align-items: center; gap: 12px; font-size: 20px; }
+html[data-theme="dark"] .brand-mark { display: block; width: 34px; height: 34px; background: var(--accent); -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+html[data-theme="dark"] .brand-text { display: flex; flex-direction: column; line-height: 1.2; }
+html[data-theme="dark"] .brand-sub { display: block; color: var(--muted); font-size: 12px; font-weight: 400; letter-spacing: 0.02em; }
+html[data-theme="dark"] .view-name { border-color: #6d5dfc; background: rgba(109, 93, 252, 0.15); color: #c9c2ff; border-radius: 8px; padding: 3px 10px; }
+html[data-theme="dark"] .conn-item .label { color: var(--muted); }
+html[data-theme="dark"] .ok > .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+html[data-theme="dark"] .bad > .dot { background: var(--bad); box-shadow: 0 0 8px var(--bad); }
+html[data-theme="dark"] .sound-btn, html[data-theme="dark"] .bar-btn { background: #12203a; border-color: var(--line); color: var(--text); border-radius: 8px; }
+html[data-theme="dark"] .bar-btn:hover { background: #172a4b; }
+html[data-theme="dark"] .sound-btn.off { background: rgba(251, 191, 36, 0.12); border-color: rgba(251, 191, 36, 0.5); color: var(--warn); }
+html[data-theme="dark"] .clock #time { color: #fff; font-size: 18px; }
+/* 왼쪽 탭 */
+html[data-theme="dark"] .tabs { background: #0b1527; border-right: 1px solid var(--line); padding: 18px 10px; gap: 6px; }
+html[data-theme="dark"] .tab { justify-content: flex-start; gap: 12px; padding: 12px 14px; border-radius: 10px; color: #b7c6dc; font-weight: 500; }
+html[data-theme="dark"] .tab::before { content: ""; width: 20px; height: 20px; flex: none; background: currentColor; -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat; }
+html[data-theme="dark"] .tab .badge { margin-left: auto; }
+html[data-theme="dark"] .tab:hover { background: #12203a; color: #fff; }
+html[data-theme="dark"] .tab.on { background: linear-gradient(90deg, rgba(56, 189, 248, 0.25), rgba(56, 189, 248, 0.05)); color: #fff; box-shadow: inset 3px 0 0 var(--accent); }
+/* 요약 줄: 아이콘 + 이름/숫자 */
+html[data-theme="dark"] .kpi {
+  position: relative;
+  align-items: center;
+  padding: 12px 14px 12px 58px;
+  background: linear-gradient(180deg, #11203a, #0e1930);
+  border: 1px solid var(--line);
+  border-left-width: 1px;
+  border-radius: 12px;
+  box-shadow: var(--glow);
+}
+html[data-theme="dark"] .kpi::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  width: 30px;
+  height: 30px;
+  transform: translateY(-50%);
+  background: #6f86a8;
+  -webkit-mask: var(--icon) center / contain no-repeat;
+  mask: var(--icon) center / contain no-repeat;
+}
+html[data-theme="dark"] .kpi[data-k="patrol"]::before { background: var(--ok); }
+html[data-theme="dark"] .kpi[data-k="dock"]::before { background: var(--accent); }
+html[data-theme="dark"] .kpi-label { color: var(--muted); }
+html[data-theme="dark"] .kpi b { color: #fff; font-size: 24px; }
+html[data-theme="dark"] .kpi.ok { border-color: var(--line); }
+html[data-theme="dark"] .kpi.warn { border-color: rgba(251, 191, 36, 0.7); background: linear-gradient(180deg, rgba(251, 191, 36, 0.14), rgba(251, 191, 36, 0.04)); box-shadow: 0 0 16px rgba(251, 191, 36, 0.18); }
+html[data-theme="dark"] .kpi.warn::before { background: var(--warn); }
+html[data-theme="dark"] .kpi.bad { border-color: rgba(255, 90, 106, 0.8); background: linear-gradient(180deg, rgba(255, 90, 106, 0.18), rgba(255, 90, 106, 0.05)); box-shadow: 0 0 16px rgba(255, 90, 106, 0.22); }
+html[data-theme="dark"] .kpi.bad::before { background: var(--bad); }
+html[data-theme="dark"] .kpi-btn:hover { box-shadow: 0 0 0 1px var(--accent), 0 0 18px rgba(56, 189, 248, 0.3); }
+/* 칸 */
+html[data-theme="dark"] .panel { background: linear-gradient(180deg, #0f1b31, #0d172a); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--glow); }
+html[data-theme="dark"] h2 { font-size: 17px; }
+html[data-theme="dark"] .map-panel { border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--glow); }
+html[data-theme="dark"] .map-panel h2 { background: #0d1830; font-size: 17px; }
+html[data-theme="dark"] .level.safe { color: var(--ok); border-color: var(--ok); background: rgba(52, 211, 153, 0.1); }
+html[data-theme="dark"] .level.caution { color: var(--warn); border-color: var(--warn); }
+html[data-theme="dark"] .level { border-radius: 10px; }
+html[data-theme="dark"] .robot-cards li { background: #0c1628; border-color: var(--line); border-radius: 10px; }
+html[data-theme="dark"] .robot-cards li.stopped { background: rgba(251, 191, 36, 0.08); border-color: rgba(251, 191, 36, 0.6); }
+html[data-theme="dark"] .robot-cards li.bad { background: rgba(255, 90, 106, 0.08); }
+html[data-theme="dark"] .alerts li { border-color: var(--line); }
+html[data-theme="dark"] .alert-btn { border-radius: 8px; }
+html[data-theme="dark"] .alert-btn:hover { background: #12203a; }
+html[data-theme="dark"] .history th, html[data-theme="dark"] .history td { border-color: var(--line); }
+html[data-theme="dark"] .row-btn { color: #9cc8ff; }
+html[data-theme="dark"] .photo-btn { border-color: var(--line); color: var(--text); }
+html[data-theme="dark"] .stat-table th { color: var(--muted); }
+/* 팝업 · 버튼 */
+html[data-theme="dark"] .popup-wrap { background: rgba(3, 8, 18, 0.7); }
+html[data-theme="dark"] .popup { background: #0f1b31; border: 1px solid var(--line); border-top-width: 4px; border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); }
+html[data-theme="dark"] .photo.none { background: #0b1527; border-color: var(--line); }
+html[data-theme="dark"] .popup .check, html[data-theme="dark"] .check { background: linear-gradient(180deg, #2b6de0, #1f55b8); border-color: #3b7cf0; color: #fff; border-radius: 10px; }
+html[data-theme="dark"] .check-row .check.false-alarm { background: transparent; color: var(--text); border-color: var(--line); }
+html[data-theme="dark"] .popup-close { background: transparent; border-color: var(--line); color: var(--muted); border-radius: 10px; }
+html[data-theme="dark"] .done-text { border-color: var(--line); }
+html[data-theme="dark"] .kpi-pick { background: #0f1b31; border-color: var(--accent); border-radius: 10px; }
+html[data-theme="dark"] .kpi-pick button:hover { background: #172a4b; }
+html[data-theme="dark"] .login { background: #0f1b31; border-top-color: var(--accent); }
+html[data-theme="dark"] .login input { background: #0b1527; color: var(--text); border-color: var(--line); }
+html[data-theme="dark"] .login-btn { background: var(--accent); border-color: var(--accent); color: #04111d; }
+/* 아이콘 칸은 좁아서 이름 위, 숫자 아래 (참고 이미지처럼) */
+html[data-theme="dark"] .kpi { flex-wrap: wrap; align-content: center; row-gap: 0; }
+html[data-theme="dark"] .kpi-label { flex-basis: 100%; margin-right: 0; font-size: 12px; }
+/* 탭 글자가 한 줄에 들어가게 */
+html[data-theme="dark"] .shell.has-tabs { grid-template-columns: 200px minmax(0, 1fr); }
+html[data-theme="dark"] .tab { white-space: nowrap; }
+
+/* ==================== 시안 뒤에 생긴 것들 (아이콘 버튼, 화면 이름, 종류 버튼 · 쪽 번호) ==================== */
+/* 기본(Carbon): 검은 위 막대 안의 아이콘 버튼은 칸 하나씩 */
+html:not([data-theme="dark"]) .icon-btn { width: 48px; height: 48px; border: 0; border-radius: 0; background: transparent; color: #f4f4f4; }
+html:not([data-theme="dark"]) .icon-btn:hover { background: #393939; }
+html:not([data-theme="dark"]) .icon-btn:focus-visible,
+html:not([data-theme="dark"]) .bar-btn:focus-visible { outline: 2px solid #ffffff; outline-offset: -2px; }
+html:not([data-theme="dark"]) .sound-btn.off { color: #f1c21b; }
+html:not([data-theme="dark"]) .conn > .icon-btn { padding: 0; justify-content: center; }
+html:not([data-theme="dark"]) .conn-item.bad .value { color: #ff8389; }
+html:not([data-theme="dark"]) .bar-btn { display: flex; align-items: center; height: 48px; }
+/* 화면 이름은 버튼이 아니라 제목 옆 흐린 글자 */
+html:not([data-theme="dark"]) .view-name { border: 0; border-left: 1px solid #525252; color: #a8a8a8; font-size: 14px; }
+html:not([data-theme="dark"]) .chip.on,
+html:not([data-theme="dark"]) .pg.on { background: var(--accent); border-color: var(--accent); color: #ffffff; }
+
+/* 다크 모드 */
+html[data-theme="dark"] .icon-btn { background: #12203a; border-color: var(--line); color: var(--text); border-radius: 8px; }
+html[data-theme="dark"] .icon-btn:hover { background: #172a4b; }
+html[data-theme="dark"] .icon-btn:focus-visible,
+html[data-theme="dark"] .bar-btn:focus-visible,
+html[data-theme="dark"] .tab:focus-visible { outline-color: var(--accent); }
+/* 시안 1의 보라 알약 대신, 버튼과 헷갈리지 않게 흐린 글자 */
+html[data-theme="dark"] .view-name { padding: 0 0 0 12px; border: 0; border-left: 1px solid var(--line); border-radius: 0; background: none; color: var(--muted); font-size: 15px; font-weight: 400; }
+html[data-theme="dark"] .chip,
+html[data-theme="dark"] .pg { background: #0c1628; }
+html[data-theme="dark"] .chip.on,
+html[data-theme="dark"] .pg.on { background: var(--accent); border-color: var(--accent); color: #04111d; }
+html[data-theme="dark"] .pg:hover:not(:disabled) { background: #172a4b; }
+html[data-theme="dark"] .hist-box thead th { background: #0f1b31; }

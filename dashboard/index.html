@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>안전 순찰 관제</title>
 <link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/theme.css">
+<script>
+// 다크 모드를 골라 뒀으면 화면을 그리기 전에 켠다 (밝은 화면이 잠깐 비치지 않게). 고르는 버튼은 app.js
+try { if (localStorage.getItem("dash-theme") === "dark") document.documentElement.dataset.theme = "dark"; } catch (e) {}
+</script>
 </head>
 <body>
 <div class="evacuate" id="evacuate" hidden>
@@ -13,7 +18,8 @@
 </div>
 
 <header class="bar">
-  <h1>안전 순찰 관제 <span class="view-name" id="view-name" hidden>관리자모드</span></h1>
+  <!-- brand-mark(방패) · brand-sub(영어 부제)는 다크 모드에서만 보인다 (theme.css) -->
+  <h1><span class="brand-mark" aria-hidden="true"></span><span class="brand-text"><span class="brand-title">안전 순찰 관제</span><span class="brand-sub">MechDog Safety Patrol</span></span> <span class="view-name" id="view-name" hidden>관리자모드</span></h1>
   <div class="conn">
     <!-- 서버 · 로봇 연결을 한 줄로. 문제가 있을 때만 빨강 -->
     <div class="conn-item" id="conn-status">
@@ -21,10 +27,8 @@
       <span class="value">연결 중</span>
     </div>
     <button type="button" class="icon-btn sound-btn off" id="sound" data-sound="1" hidden></button>
-    <!-- 다크 모드: 버튼 자리만 (기능은 나중에) -->
-    <button type="button" class="icon-btn" id="theme" title="다크 모드 (준비 중)" aria-label="다크 모드 (준비 중)">
-      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
-    </button>
+    <!-- 다크 모드 켜기 · 끄기 (밝은 화면이면 달, 다크 모드면 해). 아이콘은 app.js가 그린다 -->
+    <button type="button" class="icon-btn" id="theme" data-theme-toggle="1" title="다크 모드" aria-label="다크 모드"></button>
     <a class="bar-btn" id="view-switch" href="?admin">관리자모드</a>
     <div class="clock">
       <span id="date">-</span>
